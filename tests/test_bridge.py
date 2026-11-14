@@ -462,8 +462,35 @@ async def test_the_representative_does_not_hang_up_when_the_caller_only_says_tha
     await until(lambda: results)
     assert results[0].get("is_error") and "not said goodbye" in results[0]["content"]
     assert bridge.terminated_by is None and not env["call"].closed.is_set()
+    spoken = "".join(text for _id, text in env["tts"].chunks)
+    assert "welcome" in spoken.lower() and "goodbye" not in spoken.lower()                 # the word was never spoken, not only the hang-up refused
     env["call"].incoming.put_nowait(END)
     await task
+
+
+async def test_a_goodbye_the_caller_said_first_is_answered_with_one_and_the_line_closes(env, monkeypatch):
+    monkeypatch.setattr(bridge_module, "HANG_UP_AFTER_SPEECH_SECONDS", 0.05)
+    monkeypatch.setattr(bridge_module, "HANG_UP_TONE_SECONDS", 0.2)
+
+    async def script(messages, on_text, cancel):
+        if len(env["turns"]) == 1:
+            await on_text("You're welcome. ")
+            await on_text("Goodbye.")
+            return StreamedAssistantMessage(content=[{"type": "text", "text": "You're welcome. Goodbye."}, {"type": "tool_use", "id": "e1", "name": "end_call", "input": {}}], stop_reason="tool_use")
+        return text_message("")
+    install_model(monkeypatch, env, script)
+    bridge = VoiceBridge(settings(), {}, "persona")
+    task = asyncio.create_task(bridge.run(env["call"]))
+    await until(lambda: "stt" in env and env["tts"].synthesized)
+    await say(env, "thank you, Dana, goodbye")
+    await until(lambda: env["tts"].finalized)
+    spoken = "".join(text for _id, text in env["tts"].chunks)
+    assert "Goodbye" in spoken                                                          # the caller said it first, so it is said back
+    await env["tts"].queue.put(TTSAudioChunk(synthesis_id="stream-1", pcm16_bytes=b"\x00" * 640))
+    await env["tts"].queue.put(TTSSynthesisComplete(synthesis_id="stream-1"))
+    await asyncio.wait_for(env["call"].closed.wait(), timeout=3)
+    await task
+    assert bridge.terminated_by == "hangup"
 
 
 async def test_the_call_is_not_ended_while_the_caller_is_still_asking(env, monkeypatch):
