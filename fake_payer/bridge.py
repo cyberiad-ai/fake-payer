@@ -146,6 +146,7 @@ class VoiceBridge:
 
         # Current turn's buffering.
         self._pending_user_text: List[str] = []
+        self._ignored_chars = 0                      # what the caller said while talking over the representative, for the log only
         self._caller_language: Optional[str] = None  # last language Soniox identified in the caller's speech
         self._state = BridgeState.CONNECTING
         self._started_at = time.monotonic()
@@ -327,6 +328,9 @@ class VoiceBridge:
         assert self._stt is not None
         async for event in self._stt.events():
             if isinstance(event, STTSpeechStarted):
+                # What was decided about the caller's speech is logged (never the words, only that and how long): when a caller says something and gets no answer, this says why.
+                logger.info("caller speech started (call=%s state=%s speaking_for_another_s=%.1f holding_the_floor=%s)", self._cfg.call_uuid, self._state.value,
+                            max(0.0, self._play_until - time.monotonic()), self._holding_the_floor())
                 if self._holding_the_floor():
                     self._talked_over = True                          # carry on speaking; the caller yields
                     continue
@@ -346,6 +350,7 @@ class VoiceBridge:
 
             elif isinstance(event, STTFinalTranscript):
                 if self._talked_over:
+                    self._ignored_chars += len(event.segment)
                     continue
                 self._pending_user_text.append(event.segment)
                 if event.language:
@@ -353,12 +358,17 @@ class VoiceBridge:
 
             elif isinstance(event, STTSpeechEnded):
                 if self._talked_over:
+                    logger.info("caller speech discarded: they talked over the representative (call=%s chars=%d)", self._cfg.call_uuid, self._ignored_chars)
                     self._talked_over = False
+                    self._ignored_chars = 0
                     self._pending_user_text.clear()
                     continue
+                if not self._pending_user_text:
+                    logger.info("caller speech ended with no words recognised (call=%s)", self._cfg.call_uuid)
                 if self._pending_user_text:
                     user_text = "".join(self._pending_user_text).strip()
                     self._pending_user_text.clear()
+                    logger.info("caller turn heard (call=%s chars=%d)", self._cfg.call_uuid, len(user_text))
                     # Advance a turn.
                     self._turn_end_at = time.monotonic()
                     self._state = BridgeState.THINKING

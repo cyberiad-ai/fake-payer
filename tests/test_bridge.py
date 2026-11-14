@@ -531,3 +531,26 @@ async def test_before_it_is_audible_the_caller_still_has_the_floor(env, monkeypa
     await until(lambda: env["tts"].cancelled == 1)
     env["call"].incoming.put_nowait(END)
     await task
+
+
+async def test_what_is_decided_about_the_callers_speech_is_logged_without_the_words(env, monkeypatch, caplog):
+    import logging
+
+    async def script(messages, on_text, cancel):
+        await on_text("Yes.")
+        return text_message("Yes.")
+    install_model(monkeypatch, env, script)
+    bridge = VoiceBridge(settings(keep_the_floor=True), {}, "persona")
+    caplog.set_level(logging.INFO, logger="fake_payer.bridge")
+    task = asyncio.create_task(bridge.run(env["call"]))
+    await until(lambda: "stt" in env and env["tts"].synthesized)
+    await env["tts"].queue.put(TTSAudioChunk(synthesis_id="greeting-1", pcm16_bytes=b"\x01" * 16000))
+    await until(lambda: env["call"].played)
+    await say(env, "a secret remark made while the greeting plays")
+    await asyncio.sleep(0.2)
+    env["call"].incoming.put_nowait(END)
+    await task
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "caller speech started" in text and "holding_the_floor=True" in text
+    assert "caller speech discarded: they talked over the representative" in text and "chars=" in text
+    assert "secret remark" not in text                                      # only that it happened and how long, never the words
