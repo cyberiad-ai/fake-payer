@@ -36,6 +36,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Tup
 
 from .anthropic_streaming_client import StreamedAssistantMessage, ToolUseCall, run_claude_turn
 from .audio import play_pcm
+from .farewell import FarewellFilter, caller_said_goodbye, strip_farewell
 from .tone import DialToneDetector, dial_tone_pcm
 from .soniox_streaming_client import (
     SonioxSTTClient,
@@ -74,8 +75,6 @@ class CallSocket(Protocol):
 
 HANG_UP_AFTER_SPEECH_SECONDS = 1.0             # the line stays open this long after the last word, as a person would put the phone down
 HOLD_THE_FLOOR_GRACE_SECONDS = 1.0          # between sentences of one reply the line still counts as speaking for this long
-# The representative hangs up only after the caller has said goodbye: "that is all, thank you" is not the end of the call, the caller's own goodbye is.
-CALLER_GOODBYE = re.compile(r"\b(good\s?-?\s?bye|bye(\s|-)?bye|bye|take care|have a (good|great|nice|wonderful) (day|one|evening|afternoon))\b", re.I)
 HANG_UP_TONE_SECONDS = 3.0                     # after it hangs up, the caller hears a dial tone until they hang up too, for at most this long
 HANG_UP_PATIENCE_SECONDS = 30.0                # but never waits longer than this for the goodbye to play
 
@@ -517,9 +516,10 @@ class VoiceBridge:
 
             # Append assistant message to history (only if not canceled).
             self._messages.append({"role": "assistant", "content": assistant.content})
+            spoken = assistant.text if self._caller_said_goodbye() else strip_farewell(assistant.text)           # the log says what was said, not what the model wrote
             self._transcript.append(TurnRecord(
                 role="assistant",
-                text=assistant.text,
+                text=spoken,
                 tool_uses=[{"name": tu.name, "input": tu.input} for tu in assistant.tool_uses],
             ))
 
@@ -552,8 +552,7 @@ class VoiceBridge:
     async def _run_tool(self, call: ToolUseCall) -> Dict[str, Any]:
         """Run one tool the model asked for and return its tool_result block. An unknown tool or a failing one is reported to the model, not raised: the call goes on."""
         if call.name == END_CALL_TOOL["name"]:
-            last_caller = next((t.text for t in reversed(self._transcript) if t.role == "user"), "")
-            if not CALLER_GOODBYE.search(last_caller):
+            if not self._caller_said_goodbye():
                 return {"type": "tool_result", "tool_use_id": call.id, "is_error": True, "content": json.dumps({
                     "ok": False, "error": "The caller has not said goodbye yet, so the call is not over. Do not end it and do not say goodbye yourself. Answer anything they asked, "
                                           "make sure they have had your name, ID and the call reference, and wait: they end the conversation by saying goodbye, and then you say goodbye and end the call."})}
@@ -569,6 +568,10 @@ class VoiceBridge:
             return {"type": "tool_result", "tool_use_id": call.id, "content": json.dumps({"error": "the lookup failed"}), "is_error": True}
         content = result if isinstance(result, str) else json.dumps(result, default=str)
         return {"type": "tool_result", "tool_use_id": call.id, "content": content}
+
+    def _caller_said_goodbye(self) -> bool:
+        """The caller's latest words contain a goodbye: the only time the representative may say one, or hang up."""
+        return caller_said_goodbye(next((t.text for t in reversed(self._transcript) if t.role == "user"), ""))
 
     async def _run_one_claude_turn(self) -> Optional[StreamedAssistantMessage]:
         """Execute one Claude streaming call; stream text to TTS as it arrives.
@@ -597,9 +600,12 @@ class VoiceBridge:
             except Exception as e:
                 logger.warning("TTS send_text_chunk failed mid-turn: %s", e)
 
+        farewell = FarewellFilter(self._caller_said_goodbye())
+
         async def on_text(chunk: str) -> None:
-            if chunk:
-                await send_speech(chunk)
+            speak = farewell.feed(chunk) if chunk else ""
+            if speak:
+                await send_speech(speak)
 
         async def on_tool_use(call: ToolUseCall) -> None:
             # Tools are run centrally in _advance_turn. The lookup and the second model call take a second or more, so unless the model has already said something,
@@ -638,6 +644,10 @@ class VoiceBridge:
         # on the wire, and the server already dropped the stream.
         if self._claude_cancel is not None and self._claude_cancel.is_set():
             return None
+
+        tail = farewell.flush()                                       # the last few characters held back while checking for a farewell
+        if tail:
+            await send_speech(tail)
 
         # Finalize the stream: tells Soniox no more text is coming. The server flushes remaining audio and emits TTSSynthesisComplete, which the TTS event
         # loop uses to transition back to LISTENING.
