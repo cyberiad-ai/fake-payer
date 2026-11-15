@@ -7,7 +7,7 @@ from fake_payer import bridge as bridge_module
 from fake_payer.anthropic_streaming_client import StreamedAssistantMessage, ToolUseCall
 from fake_payer.bridge import BridgeSettings, VoiceBridge
 from fake_payer.soniox_streaming_client import (
-    STTFinalTranscript, STTSpeechEnded, STTSpeechStarted, TTSAudioChunk, TTSSynthesisComplete,
+    STTFinalTranscript, STTPartialTranscript, STTSpeechEnded, STTSpeechStarted, TTSAudioChunk, TTSSynthesisComplete,
 )
 
 END = object()
@@ -164,6 +164,46 @@ async def test_a_turn_streams_the_models_words_into_speech_and_plays_the_audio(e
     await task
     assert [t.role for t in bridge.transcript] == ["assistant", "user", "assistant"]
     assert bridge.transcript[-1].text == "Your deductible is fifty dollars."
+
+
+async def test_a_turn_is_taken_when_the_words_stop_even_if_soniox_never_says_the_caller_has_finished(env, monkeypatch):
+    monkeypatch.setattr(bridge_module, "ENDPOINT_FALLBACK_SECONDS", 0.2)
+
+    async def script(messages, on_text, cancel):
+        await on_text("Yes, covered.")
+        return text_message("Yes, covered.")
+    install_model(monkeypatch, env, script)
+    bridge = VoiceBridge(settings(), {}, "persona")
+    task = asyncio.create_task(bridge.run(env["call"]))
+    await until(lambda: "stt" in env and env["tts"].synthesized)
+    await env["stt"].queue.put(STTSpeechStarted())
+    await env["stt"].queue.put(STTFinalTranscript(text="can you confirm that "))
+    await env["stt"].queue.put(STTPartialTranscript(text="this patient is covered"))
+    await until(lambda: env["turns"])
+    assert env["turns"][0][-1] == {"role": "user", "content": "can you confirm that this patient is covered"}
+    env["call"].incoming.put_nowait(END)
+    await task
+
+
+async def test_the_final_versions_of_words_already_answered_are_not_a_second_turn(env, monkeypatch):
+    monkeypatch.setattr(bridge_module, "ENDPOINT_FALLBACK_SECONDS", 0.2)
+
+    async def script(messages, on_text, cancel):
+        await on_text("Yes.")
+        return text_message("Yes.")
+    install_model(monkeypatch, env, script)
+    bridge = VoiceBridge(settings(), {}, "persona")
+    task = asyncio.create_task(bridge.run(env["call"]))
+    await until(lambda: "stt" in env and env["tts"].synthesized)
+    await env["stt"].queue.put(STTSpeechStarted())
+    await env["stt"].queue.put(STTPartialTranscript(text="is the patient covered"))
+    await until(lambda: env["turns"])
+    await env["stt"].queue.put(STTFinalTranscript(text="is the patient covered"))      # Soniox finalises them late
+    await env["stt"].queue.put(STTSpeechEnded())
+    await asyncio.sleep(0.5)
+    assert len(env["turns"]) == 1
+    env["call"].incoming.put_nowait(END)
+    await task
 
 
 async def test_a_tool_the_model_asks_for_is_run_and_its_result_goes_back_to_the_model(env, monkeypatch):
