@@ -77,6 +77,8 @@ HANG_UP_AFTER_SPEECH_SECONDS = 1.0             # the line stays open this long a
 HOLD_THE_FLOOR_GRACE_SECONDS = 1.0          # between sentences of one reply the line still counts as speaking for this long
 HANG_UP_TONE_SECONDS = 3.0                     # after it hangs up, the caller hears a dial tone until they hang up too, for at most this long
 HANG_UP_PATIENCE_SECONDS = 30.0                # but never waits longer than this for the goodbye to play
+ENDPOINT_FALLBACK_SECONDS = 2.5                # words heard, then nothing new for this long: the caller has finished, whether or not Soniox has said so (it sometimes does not)
+LATE_FINALS_SECONDS = 10.0                     # after a turn was taken on that fallback, the final versions of the same words are dropped for this long
 
 END_CALL_TOOL: Dict[str, Any] = {
     "name": "end_call",
@@ -162,6 +164,10 @@ class VoiceBridge:
         self._call: Optional[CallSocket] = None
         self._dial_tone = DialToneDetector()
         self._talked_over = False                # the caller began to speak while we held the floor: its words are not taken as a turn
+        self._partial_tail = ""                  # the words not yet final, as last heard
+        self._last_words_at: Optional[float] = None   # when words (partial or final) last arrived for the turn being heard
+        self._drop_finals_chars = 0              # a turn taken without Soniox's end-of-speech: the final versions of its words still to come are not a new turn
+        self._drop_finals_until = 0.0
         self._ending = False                     # the model has decided the call is over: it hangs up once the goodbye has been heard
         # How long each reply took to begin: from the end-of-speech signal (Soniox raises it about 0.3 s after the caller stops) to the first audio sent.
         self._turn_end_at: Optional[float] = None
@@ -231,8 +237,11 @@ class VoiceBridge:
             tts_loop = asyncio.create_task(self._tts_event_loop(call))
             playout = asyncio.create_task(self._playout_loop(call))
             watchdog = asyncio.create_task(self._watchdog(call))
+            endpoint_fallback = asyncio.create_task(self._endpoint_fallback())
 
-            done, pending = await asyncio.wait([audio_in, stt_loop, tts_loop, playout, watchdog], return_when=asyncio.FIRST_COMPLETED)
+            names = {audio_in: "audio_in", stt_loop: "stt_loop", tts_loop: "tts_loop", playout: "playout", watchdog: "watchdog", endpoint_fallback: "endpoint_fallback"}
+            done, pending = await asyncio.wait(list(names), return_when=asyncio.FIRST_COMPLETED)
+            logger.info("bridge: %s finished first, ending the call (call=%s)", ", ".join(names[t] for t in done), self._cfg.call_uuid)
             for t in pending:
                 t.cancel()
             for t in pending:
@@ -346,12 +355,21 @@ class VoiceBridge:
                 if self._state == BridgeState.AGENT_SPEAKING and event.text:
                     await self._barge_in()
                     self._state = BridgeState.CALLER_SPEAKING
+                if event.text and self._state in (BridgeState.LISTENING, BridgeState.CALLER_SPEAKING):
+                    self._partial_tail = event.text
+                    self._last_words_at = time.monotonic()
 
             elif isinstance(event, STTFinalTranscript):
                 if self._talked_over:
                     self._ignored_chars += len(event.segment)
                     continue
+                if self._drop_finals_chars > 0 and time.monotonic() < self._drop_finals_until:
+                    self._drop_finals_chars -= len(event.segment.strip())
+                    continue
+                self._drop_finals_chars = 0
                 self._pending_user_text.append(event.segment)
+                self._partial_tail = ""
+                self._last_words_at = time.monotonic() if self._state in (BridgeState.LISTENING, BridgeState.CALLER_SPEAKING) else None
                 if event.language:
                     self._caller_language = event.language
 
@@ -362,22 +380,44 @@ class VoiceBridge:
                     self._ignored_chars = 0
                     self._pending_user_text.clear()
                     continue
+                self._drop_finals_chars = 0
                 if not self._pending_user_text:
                     logger.info("caller speech ended with no words recognised (call=%s)", self._cfg.call_uuid)
-                if self._pending_user_text:
-                    user_text = "".join(self._pending_user_text).strip()
-                    self._pending_user_text.clear()
-                    logger.info("caller turn heard (call=%s chars=%d)", self._cfg.call_uuid, len(user_text))
-                    # Advance a turn.
-                    self._turn_end_at = time.monotonic()
-                    self._state = BridgeState.THINKING
-                    self._schedule_advance_turn(user_text)
+                self._start_caller_turn("")
 
             elif isinstance(event, STTError):
                 logger.warning("STT error: %s (fatal=%s)", event.message, event.fatal)
                 if event.fatal:
                     self._terminated_by = self._terminated_by or "error"
                     return
+
+    def _start_caller_turn(self, tail: str) -> None:
+        """What the caller said (final words, and `tail`: words not yet final) becomes a turn the representative answers."""
+        user_text = " ".join(part for part in ("".join(self._pending_user_text).strip(), tail.strip()) if part)
+        self._pending_user_text.clear()
+        self._partial_tail = ""
+        self._last_words_at = None
+        if not user_text:
+            return
+        logger.info("caller turn heard (call=%s chars=%d)", self._cfg.call_uuid, len(user_text))
+        self._turn_end_at = time.monotonic()
+        self._state = BridgeState.THINKING
+        self._schedule_advance_turn(user_text)
+
+    async def _endpoint_fallback(self) -> None:
+        """Soniox decides when the caller has finished; now and then it does not, and says nothing for half a minute (the platform's question then got no answer, and the call
+        ended at a minute). When words have been heard and nothing new has come for a while, the caller has finished."""
+        while True:
+            await asyncio.sleep(0.25)
+            if self._last_words_at is None or self._state not in (BridgeState.LISTENING, BridgeState.CALLER_SPEAKING) or self._talked_over:
+                continue
+            if time.monotonic() - self._last_words_at < ENDPOINT_FALLBACK_SECONDS:
+                continue
+            tail = self._partial_tail
+            logger.info("caller turn taken without the end-of-speech signal: no new words for %.1f s (call=%s)", ENDPOINT_FALLBACK_SECONDS, self._cfg.call_uuid)
+            if tail:
+                self._drop_finals_chars, self._drop_finals_until = len(tail.strip()), time.monotonic() + LATE_FINALS_SECONDS
+            self._start_caller_turn(tail)
 
     # ---- outbound event loop: TTS -> caller ------------------------------
 
