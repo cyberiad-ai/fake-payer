@@ -37,6 +37,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Tup
 from .anthropic_streaming_client import StreamedAssistantMessage, ToolUseCall, run_claude_turn
 from .audio import play_pcm
 from .farewell import FarewellFilter, caller_said_goodbye, strip_farewell
+from .pronunciation import Respeller, respell
 from .tone import DialToneDetector, dial_tone_pcm
 from .soniox_streaming_client import (
     SonioxSTTClient,
@@ -218,7 +219,7 @@ class VoiceBridge:
             try:
                 greeting = self._cfg.greeting
                 assert self._tts is not None
-                self._active_tts_synthesis_id = await self._tts.synthesize(greeting)
+                self._active_tts_synthesis_id = await self._tts.synthesize(respell(greeting))
                 self._live_ids.add(self._active_tts_synthesis_id)
                 self._state = BridgeState.AGENT_SPEAKING
                 logger.info("bridge initial greeting queued (call=%s synth_id=%s)", self._cfg.call_uuid, self._active_tts_synthesis_id)
@@ -626,6 +627,8 @@ class VoiceBridge:
         # Lazy: only open a stream if Claude actually emits text this turn. Tool-only turns produce no audio; don't burn a config roundtrip.
         turn_synthesis_id: Optional[str] = None
 
+        respeller = Respeller()
+
         async def send_speech(text: str) -> None:
             nonlocal turn_synthesis_id
             if turn_synthesis_id is None:
@@ -636,7 +639,8 @@ class VoiceBridge:
                 self._live_ids.add(turn_synthesis_id)
                 self._state = BridgeState.AGENT_SPEAKING
             try:
-                await self._tts.send_text_chunk(text, turn_synthesis_id)
+                if text := respeller.feed(text):
+                    await self._tts.send_text_chunk(text, turn_synthesis_id)
             except Exception as e:
                 logger.warning("TTS send_text_chunk failed mid-turn: %s", e)
 
@@ -688,6 +692,8 @@ class VoiceBridge:
         tail = farewell.flush()                                       # the last few characters held back while checking for a farewell
         if tail:
             await send_speech(tail)
+        if turn_synthesis_id is not None and (rest := respeller.flush()):
+            await self._tts.send_text_chunk(rest, turn_synthesis_id)
 
         # Finalize the stream: tells Soniox no more text is coming. The server flushes remaining audio and emits TTSSynthesisComplete, which the TTS event
         # loop uses to transition back to LISTENING.
