@@ -1,5 +1,5 @@
 # Copied from agent_framework b227c23b: core/soniox_streaming_client.py
-# Changes: none.
+# Changes: SonioxTTSClient reopens its socket when the server closes it cleanly (an idle socket is closed after about 50 s); the call used to end.
 # Changes from the original are listed in this header; everything else is as it was.
 """
 Soniox real-time STT + TTS WebSocket clients.
@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import base64
 import json
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -482,6 +483,7 @@ class SonioxTTSClient:
         self._language = language
         self._ws: Optional[ClientConnection] = None
         self._closed = False
+        self._reopen_lock = asyncio.Lock()
         # The current (in-flight) stream_id. Each synthesize() call starts a
         # brand-new stream on the server by sending a full config message
         # with a fresh stream_id; stream_ids are NOT reusable across
@@ -496,6 +498,9 @@ class SonioxTTSClient:
         config message — we send one config per utterance."""
         if self._ws is not None:
             raise RuntimeError("SonioxTTSClient.connect() called twice")
+        await self._open()
+
+    async def _open(self) -> None:
         try:
             self._ws = await websockets.connect(
                 SONIOX_TTS_URL,
@@ -512,6 +517,18 @@ class SonioxTTSClient:
             "Soniox TTS WS opened (model=%s, voice=%s, lang=%s, sr=%d)",
             self._model, self._voice, self._language, self._sample_rate,
         )
+
+    def _is_open(self) -> bool:
+        return self._ws is not None and getattr(self._ws, "close_code", None) is None
+
+    async def _ensure_open(self) -> None:
+        """Soniox closes a TTS socket that has been idle for about 50 s (a caller who listens to a long reply first); the next synthesis needs a new one.
+        Whoever notices first reopens it; the lock keeps the other from opening a second."""
+        async with self._reopen_lock:
+            if self._closed or self._is_open():
+                return
+            logger.warning("Soniox TTS WS was closed by the server; reopening")
+            await self._open()
 
     async def begin_stream(self, language: Optional[str] = None) -> str:
         """Open a new Soniox TTS stream. Returns the stream_id.
@@ -535,6 +552,7 @@ class SonioxTTSClient:
         """
         if self._ws is None or self._closed:
             raise RuntimeError("begin_stream on closed/unopened TTS WS")
+        await self._ensure_open()
         synthesis_id = uuid.uuid4().hex
         self._current_synthesis_id = synthesis_id
         config = {
@@ -620,27 +638,46 @@ class SonioxTTSClient:
             logger.debug("TTS cancel send failed (will fall back to close): %s", e)
 
     async def events(self) -> AsyncIterator[TTSEvent]:
-        """Yield typed TTS events until the peer closes or close() is called."""
+        """Yield typed TTS events until close() is called or the connection fails.
+
+        A clean close by the server (an idle socket) is not the end: the socket is reopened and the events go on, so a reader that treats the end of this
+        iterator as the end of the call keeps the call. Closes that are not clean, and sockets that will not stay open, end it with a fatal error.
+        """
         if self._ws is None:
             raise RuntimeError("events() called before connect()")
         raw_count = 0
-        try:
-            async for raw in self._ws:
-                raw_count += 1
-                # Dump the first 15 raw messages so we can reverse-engineer
-                # Soniox's actual TTS wire format (docs are imprecise).
-                if raw_count <= 15:
-                    if isinstance(raw, (bytes, bytearray)):
-                        preview = f"<binary {len(raw)} bytes>"
-                    else:
-                        preview = raw[:500] if isinstance(raw, str) else str(raw)[:500]
-                    logger.warning("TTS raw[%d]: %s", raw_count, preview)
-                event = self._parse_event(raw)
-                if event is not None:
-                    yield event
-        except websockets.exceptions.ConnectionClosed as e:
-            if e.code not in (1000, 1001):
-                yield TTSError(message=f"TTS WS closed: {e}", fatal=True)
+        reopened_without_traffic = 0
+        while True:
+            try:
+                async for raw in self._ws:
+                    raw_count += 1
+                    reopened_without_traffic = 0
+                    # Dump the first 15 raw messages so we can reverse-engineer
+                    # Soniox's actual TTS wire format (docs are imprecise).
+                    if raw_count <= 15:
+                        if isinstance(raw, (bytes, bytearray)):
+                            preview = f"<binary {len(raw)} bytes>"
+                        else:
+                            preview = raw[:500] if isinstance(raw, str) else str(raw)[:500]
+                        logger.warning("TTS raw[%d]: %s", raw_count, preview)
+                    event = self._parse_event(raw)
+                    if event is not None:
+                        yield event
+            except websockets.exceptions.ConnectionClosed as e:
+                if e.code not in (1000, 1001):
+                    yield TTSError(message=f"TTS WS closed: {e}", fatal=True)
+                    return
+            if self._closed:
+                return
+            reopened_without_traffic += 1
+            if reopened_without_traffic > 3:
+                yield TTSError(message="TTS WS keeps closing right after it is opened", fatal=True)
+                return
+            try:
+                await self._ensure_open()
+            except Exception as e:
+                yield TTSError(message=f"TTS WS could not be reopened: {e!r}", fatal=True)
+                return
 
     def _parse_event(self, raw: Union[str, bytes]) -> Optional[TTSEvent]:
         """Map a Soniox TTS JSON frame to a typed event.
