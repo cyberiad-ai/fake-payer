@@ -314,3 +314,108 @@ def test_a_partial_transcript_keeps_its_raw_text_too():
 def test_an_event_built_without_raw_text_is_still_a_separate_word():
     assert STTFinalTranscript(text="hello").segment == " hello"
     assert STTPartialTranscript(text="world").segment == " world"
+
+
+# ---- a socket the server closes cleanly while the caller is still listening (an idle TTS socket) -----------------------------------------------------------
+
+async def _tts_server(monkeypatch, behaviour):
+    """A local TTS endpoint; `behaviour(n, ws)` runs for the n-th connection (1, 2, ...)."""
+    import websockets
+    opened = []
+
+    async def handler(ws):
+        opened.append(ws)
+        await behaviour(len(opened), ws)
+
+    server = await websockets.serve(handler, "127.0.0.1", 0)
+    monkeypatch.setattr(f"{MODULE}.SONIOX_TTS_URL", f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/tts")
+    return server, opened
+
+
+@pytest.mark.asyncio
+async def test_a_clean_close_by_the_server_does_not_end_the_event_stream(monkeypatch):
+    """The fake payer ended the whole call when this iterator stopped: Soniox closes a TTS socket that sat idle while the caller listened."""
+    import asyncio
+
+    async def behaviour(n, ws):
+        if n == 1:
+            await ws.close(1000)                                       # idle: closed cleanly, nothing was asked of it
+        else:
+            await ws.recv()                                            # the stream's config
+            await ws.send(json.dumps({"stream_id": "s", "audio": "AAAA", "audio_end": False}))
+            await asyncio.sleep(5)
+
+    server, opened = await _tts_server(monkeypatch, behaviour)
+    client = SonioxTTSClient(api_key="k", voice="Adrian", model="tts-rt-v1")
+    try:
+        await client.connect()
+        events = client.events()
+        # the server closed the first socket; the reader waits for a reply, and the next synthesis reopens the socket under it
+        task = asyncio.ensure_future(events.__anext__())
+        await asyncio.sleep(0.3)
+        assert not task.done(), "the event stream ended when the server closed the idle socket"
+        await client.begin_stream()
+        event = await asyncio.wait_for(task, 3)
+        assert event.pcm16_bytes and len(opened) == 2
+    finally:
+        await client.close()
+        server.close()
+
+
+@pytest.mark.asyncio
+async def test_the_reader_reopens_the_socket_itself_and_keeps_listening(monkeypatch):
+    import asyncio
+
+    async def behaviour(n, ws):
+        if n == 1:
+            await ws.close(1001)
+        else:
+            await asyncio.sleep(5)
+
+    server, opened = await _tts_server(monkeypatch, behaviour)
+    client = SonioxTTSClient(api_key="k", voice="Adrian", model="tts-rt-v1")
+    try:
+        await client.connect()
+        task = asyncio.ensure_future(client.events().__anext__())
+        await asyncio.sleep(0.5)
+        assert not task.done() and len(opened) == 2
+    finally:
+        task.cancel()
+        await client.close()
+        server.close()
+
+
+@pytest.mark.asyncio
+async def test_a_socket_that_keeps_closing_ends_the_stream_with_a_fatal_error(monkeypatch):
+    async def behaviour(n, ws):
+        await ws.close(1000)
+
+    server, opened = await _tts_server(monkeypatch, behaviour)
+    client = SonioxTTSClient(api_key="k", voice="Adrian", model="tts-rt-v1")
+    try:
+        await client.connect()
+        from fake_payer.soniox_streaming_client import TTSError
+        import asyncio
+        event = await asyncio.wait_for(client.events().__anext__(), 5)
+        assert isinstance(event, TTSError) and event.fatal and len(opened) <= 5
+    finally:
+        await client.close()
+        server.close()
+
+
+@pytest.mark.asyncio
+async def test_a_close_that_is_not_clean_is_still_a_fatal_error(monkeypatch):
+    from fake_payer.soniox_streaming_client import TTSError
+
+    async def behaviour(n, ws):
+        await ws.close(1011)
+
+    server, opened = await _tts_server(monkeypatch, behaviour)
+    client = SonioxTTSClient(api_key="k", voice="Adrian", model="tts-rt-v1")
+    try:
+        await client.connect()
+        event = await client.events().__anext__()
+        assert isinstance(event, TTSError) and event.fatal and len(opened) == 1
+    finally:
+        await client.close()
+        server.close()
