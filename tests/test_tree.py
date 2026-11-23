@@ -274,3 +274,18 @@ def test_hold_music_is_the_length_asked_for_and_not_silent():
     pcm = hold_music_pcm(1.0)
     assert len(pcm) == 16000 and any(pcm)
     assert hold_music_pcm(0) == b""
+
+
+async def test_a_caller_who_hangs_up_while_the_line_is_speaking_ends_the_walk_quietly():
+    """The connection is closed under the line mid-prompt: that is the caller going, not an error."""
+    from websockets.exceptions import ConnectionClosedOK
+
+    class Hangs(ScriptedCall):
+        async def send_audio(self, data):
+            await super().send_audio(data)
+            if len(self.said) == 2:
+                raise ConnectionClosedOK(None, None)
+
+    call = Hangs([])
+    result = await asyncio.wait_for(TreeRunner(small(), FIXTURE, FakePrompts(), call, pace=0).run(), 5)
+    assert result.outcome == "caller_gone" and [e["node"] for e in result.events if e.get("visit")] == ["greeting", "main"]

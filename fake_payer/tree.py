@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 import yaml
+from websockets.exceptions import ConnectionClosed
 
 from .audio import FRAME_BYTES, FRAME_SECONDS, hold_music_pcm
 from .coverage import Fixture
@@ -405,7 +406,10 @@ class TreeRunner:
             key = self._pending_key()
             if key is not None and barge_in:
                 return key
-            await self._call.send_audio(pcm[start:start + FRAME_BYTES])
+            try:
+                await self._call.send_audio(pcm[start:start + FRAME_BYTES])
+            except ConnectionClosed:                              # the caller hung up while the line was speaking
+                raise _End("caller_gone") from None
             await asyncio.sleep(self._pace)
         if not barge_in:
             while self._pending_key() is not None:
