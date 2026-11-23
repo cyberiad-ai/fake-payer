@@ -161,9 +161,9 @@ class FakePayerServer:
         self._active_calls.add(call_uuid)
         mode = self._choose_mode()
         started = time.monotonic()
-        events: list = []
         ended = "error"
         bridge: Optional[VoiceBridge] = None
+        runner: Optional[TreeRunner] = None
         try:
             if mode == "tree":
                 runner = TreeRunner(self._tree, self._fixture, self._prompts, call, reference=call_reference(call_uuid), ring_audio=self._ring_audio, answer_delay_seconds=self._config.answer_delay_seconds,
@@ -173,7 +173,6 @@ class FakePayerServer:
                     ended = {"hangup": "tree_ended", "transfer": "transferred", "caller_gone": "caller_hung_up"}[result.outcome]
                 except asyncio.TimeoutError:
                     ended = "time_limit"
-                events = runner.events
                 if ended != "transferred":
                     await call.close()                                   # the tree has hung up (or the caller has gone, or the time is up)
             if mode == "conversation" or ended == "transferred":
@@ -185,6 +184,7 @@ class FakePayerServer:
         finally:
             self._limits.release(handle)
             self._active_calls.discard(call_uuid)
+            events = runner.events if runner is not None else []            # the tree's path, kept even when the call ended with an error
             if bridge is not None:
                 self._write_log(call_uuid, caller.last4, ended_by(bridge.terminated_by), bridge.duration_seconds, turns_from_transcript(bridge.transcript), bridge.reply_latencies_ms,
                                 mode=mode, events=events)

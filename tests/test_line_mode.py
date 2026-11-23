@@ -176,3 +176,26 @@ async def test_in_conversation_mode_keys_do_nothing_and_the_log_says_so(legs, tm
     await until(lambda: list((tmp_path / "calls").glob("*.json")))
     [entry] = [json.loads(p.read_text()) for p in (tmp_path / "calls").glob("*.json")]
     assert entry["mode"] == "conversation" and entry["events"] == []
+
+
+async def test_a_caller_who_hangs_up_while_the_tree_is_speaking_is_not_an_error(counted, tmp_path, caplog):
+    """The line is speaking a long prompt, a frame at a time; the caller closes the call after the first. It is logged as the caller hanging up, with the path so far."""
+    from fake_payer.audio import FRAME_BYTES
+
+    class Long(FakePrompts):
+        async def audio(self, text):
+            return b"A" * FRAME_BYTES * 200
+
+    server = FakePayerServer(config(tmp_path, LINE_MODE="tree"), tree=small(), prompts=Long(), tree_pace=0.005)
+    context, port = await running(server)
+    try:
+        async with connect(await ws_url(port, "tree-5")) as call:
+            await call.recv()
+            for digit in "12345678":                                 # keys queued behind the hang-up: the line takes one item a frame, so it meets a closed socket first
+                await call.send(key_frame(digit))
+        await until(lambda: list((tmp_path / "calls").glob("*.json")))
+        [entry] = [json.loads(p.read_text()) for p in (tmp_path / "calls").glob("*.json")]
+        assert entry["mode"] == "tree" and entry["ended"] == "caller_hung_up" and entry["events"] and entry["events"][0]["node"] == "greeting"
+        assert not [r for r in caplog.records if r.levelname == "ERROR"]
+    finally:
+        await context.__aexit__(None, None, None)
