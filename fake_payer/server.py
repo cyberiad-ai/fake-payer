@@ -95,6 +95,7 @@ class FakePayerServer:
         self._fixture = fixture if fixture is not None else Fixture.load()
         self._tools: Tools = tools if tools is not None else make_tools(self._fixture)
         self._tree = tree if tree is not None else PhoneTree.load()
+        self._tree.check_against(self._fixture)
         self._prompts = prompts if prompts is not None else Prompts(config)
         self._chance = chance or random.Random()
         self._tree_pace = tree_pace
@@ -165,7 +166,7 @@ class FakePayerServer:
         bridge: Optional[VoiceBridge] = None
         try:
             if mode == "tree":
-                runner = TreeRunner(self._tree, self._fixture, self._prompts, call, ring_audio=self._ring_audio, answer_delay_seconds=self._config.answer_delay_seconds,
+                runner = TreeRunner(self._tree, self._fixture, self._prompts, call, reference=call_reference(call_uuid), ring_audio=self._ring_audio, answer_delay_seconds=self._config.answer_delay_seconds,
                                     pace=self._tree_pace)
                 try:
                     result = await asyncio.wait_for(runner.run(), self._config.max_call_seconds or None)

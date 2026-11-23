@@ -59,3 +59,34 @@ async def test_prepare_has_every_line_ready(tmp_path, synthesized):
     assert synthesized == ["One.", "Two."]
     await prompts.audio("One.")
     assert synthesized == ["One.", "Two."]
+
+
+async def test_two_calls_wanting_the_same_line_at_once_share_one_synthesis(tmp_path, monkeypatch):
+    import asyncio
+    seen = []
+
+    async def slow(config, text):
+        seen.append(text)
+        await asyncio.sleep(0.05)
+        return b"PCM"
+    monkeypatch.setattr(refusals, "synthesize", slow)
+    prompts = make(tmp_path)
+    assert await asyncio.gather(prompts.audio("Press 1."), prompts.audio("Press 1.")) == [b"PCM", b"PCM"] and seen == ["Press 1."]
+
+
+async def test_prepare_works_a_few_at_a_time_and_makes_each_line_once(tmp_path, monkeypatch):
+    import asyncio
+    running = peak = 0
+    seen = []
+
+    async def slow(config, text):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        seen.append(text)
+        await asyncio.sleep(0.02)
+        running -= 1
+        return b"PCM"
+    monkeypatch.setattr(refusals, "synthesize", slow)
+    await make(tmp_path).prepare([f"Line {n}." for n in range(10)] + ["Line 1."], concurrency=3)
+    assert peak == 3 and sorted(seen) == sorted(f"Line {n}." for n in range(10))
