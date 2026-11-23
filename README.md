@@ -6,7 +6,17 @@ You call a number. After a couple of rings a made-up insurance representative ("
 
 **This is a test fixture, not a product.** It uses synthetic data only. It does not imitate any real insurer: no real payer's name, number, plan terms or member data belongs in this repository. A check (`python -m fake_payer.real_data_check`, run in CI) guards against real data creeping in.
 
-## How a call goes
+## Two ways a call is answered
+
+`LINE_MODE` says who answers:
+
+- `conversation`: the representative described below answers every call.
+- `tree`: a **phone tree** answers every call: a keypad menu that routes and answers (see "The phone tree").
+- `mixed` (the default): each call is the phone tree with probability `TREE_FRACTION` (0.5, so about half and half) and the representative otherwise. Each call log entry says which (`mode`).
+
+To make one of them the only line, set `LINE_MODE` and restart; to test one without the other, nothing else is needed.
+
+## How a call goes (the representative)
 
 1. The line rings (`RING_COUNT` rings of ringback tone), waits a moment (`ANSWER_DELAY_SECONDS`), then greets the caller and says the call is fictional and recorded.
 2. The representative asks for what it needs to find the patient (member number, date of birth and name, group number, NPIs, tax ID digits). Any patient the caller names is accepted as an ordinary active member; the named fixture members keep their scenarios (see below). Name pronunciation need not be exact.
@@ -14,6 +24,17 @@ You call a number. After a couple of rings a made-up insurance representative ("
 4. It **keeps the floor**: while it is audibly speaking it ignores the caller talking over it (`KEEP_THE_FLOOR=0` lets the caller cut it off).
 5. It waits as long as the caller has questions. There is no call-length limit by default.
 6. It says goodbye, and hangs up, only after the caller has said goodbye: if the model tries to say one earlier, the words of the farewell are taken out of what is spoken and logged. "Thank you" or "that is all" does not end the call: it stays on the line, gives its name, ID and the call reference if the caller has not had them, and waits. When the caller says goodbye it says goodbye back and hangs up (the end-call tool refuses until the caller's last words contain a goodbye). After either side hangs up the line plays a three-second dial tone.
+
+## The phone tree
+
+The tree is [`fake_payer/tree.yaml`](fake_payer/tree.yaml); the node types are described at its top. A tree call rings and greets like the other line (same disclosure), then plays a menu. The caller answers with the keypad: Vonage sends each key to the call's websocket as a `websocket:dtmf` frame. Speech is ignored. A key pressed while a menu or entry prompt is playing cuts it short, as on a real line.
+
+- **Routes:** 1 eligibility and benefits, 2 claim status, 3 fax numbers and addresses, 4 provider enrollment, 5 supervisor, 0 representative, 9 repeat.
+- **Answers:** under 1 the caller keys the six-digit member ID (without the M) and the date of birth (MMDDYYYY). The tree then offers eligibility dates, annual maximum and deductible (with what remains), coverage percentages and waiting periods, each read from the same `Fixture.lookup` the representative uses, so the figures are the same. A terminated member gets the end date and nothing else. Lines about a member are synthesized the first time they are spoken and kept.
+- **Dead ends and bad paths, on purpose:** claim status says it cannot help and hangs up; the fax option goes round to the main menu; provider enrollment is a loop with no way forward; a supervisor never comes (hold music, then the call is dropped); a wrong date of birth is refused (three tries, then the call ends); an invalid key, a missing key or an impossible date is said so and asked again, and three in a row end the call.
+- **Representative:** key 0 plays hold music and then hands the call to the representative, who greets the caller again without ringing. Both parts of that call are in one log entry.
+- **Editing it:** menu text, options and routes are data; a new node type or action needs code (`fake_payer/tree.py`). The file is checked when it loads (unknown targets, unreachable nodes, a menu with no way out) and the line will not start with a faulty one.
+- **Hold music** is a short synthesized tune (`audio.py`); the prompts are in the configured voice and kept in `AUDIO_CACHE_DIR`.
 
 ## What it knows
 
@@ -50,6 +71,7 @@ Optional (defaults in parentheses; see [`.env.example`](.env.example) and `fake_
 | `DAILY_SPEND_CEILING_USD` (5), `COST_PER_MINUTE_USD` (0.15) | Spend estimate ceiling |
 | `RING_COUNT` (2), `ANSWER_DELAY_SECONDS` (2), `REPLY_DELAY_SECONDS` (2) | Pacing: rings before answering, pause after the last ring, least time from the caller finishing to the first sound of the reply |
 | `KEEP_THE_FLOOR` (1) | Carry on speaking when talked over |
+| `LINE_MODE` (mixed), `TREE_FRACTION` (0.5) | Who answers: `conversation`, `tree` or `mixed`; in `mixed`, the share of calls the phone tree gets (0 to 1) |
 | `TTS_VOICE` (Adrian), `SONIOX_STT_MODEL`, `SONIOX_TTS_MODEL` | Speech settings |
 | `LISTEN_HOST` (127.0.0.1), `PORT` (8080) | Where it listens |
 | `CALL_LOG_DIR` (calls), `LOG_RETENTION_DAYS` (7), `AUDIO_CACHE_DIR` | Call log and cached spoken refusals |
@@ -64,7 +86,7 @@ Speech is [Soniox](https://soniox.com) in and out; the conversation is a languag
 
 ## Call log
 
-Each call is written to a JSON file in `CALL_LOG_DIR` (the turns, how it ended, duration, caller's last four digits and the call reference), and files older than `LOG_RETENTION_DAYS` are removed. The call reference the representative gives is derived from the call, so a caller's saved reference can be matched to its log entry.
+Each call is written to a JSON file in `CALL_LOG_DIR` (which line answered, the turns, for a tree call its path of nodes, keys and entries, how it ended, duration, caller's last four digits and the call reference), and files older than `LOG_RETENTION_DAYS` are removed. The call reference the representative gives is derived from the call, so a caller's saved reference can be matched to its log entry.
 
 ## Deploying
 
@@ -76,4 +98,4 @@ Credentials, the telephone number, real insurer names and real data. Configurati
 
 ## Specification
 
-The original design is in [`openspec/changes/add-fake-payer-phone-line/`](openspec/changes/add-fake-payer-phone-line/) (proposal, design, specs, tasks). Later behaviour (ringing, keeping the floor, ending the call, the dial tone, answers for the whole benefit catalog, no time limit) was added after it, so where they differ, the code and this README are current. A phone menu, hold time, refusals, transfers and conflicting answers are still to come.
+The original design is in [`openspec/changes/add-fake-payer-phone-line/`](openspec/changes/add-fake-payer-phone-line/) (proposal, design, specs, tasks). Later behaviour (ringing, keeping the floor, ending the call, the dial tone, answers for the whole benefit catalog, no time limit) was added after it, so where they differ, the code and this README are current. The phone tree was added by [`openspec/changes/add-phone-tree/`](openspec/changes/add-phone-tree/). Identity questions that need more than a member number, refusals, a representative who demands a human and conflicting answers are still to come.

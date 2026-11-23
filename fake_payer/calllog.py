@@ -48,7 +48,7 @@ class CallLog:
         return datetime.datetime.fromtimestamp(self._clock(), datetime.timezone.utc)
 
     def write(self, *, reference: str, last4: str, ended: str, duration_seconds: float = 0.0, turns: Optional[List[Dict[str, Any]]] = None,
-              reply_latency_ms: Optional[List[int]] = None) -> Path:
+              reply_latency_ms: Optional[List[int]] = None, mode: str = "conversation", events: Optional[List[Dict[str, Any]]] = None) -> Path:
         turns = turns or []
         stated = [str(f) for turn in turns if turn["role"] == "assistant" for f in spoken_figures(turn["text"])]
         record = {
@@ -56,10 +56,12 @@ class CallLog:
             "reference": reference,
             "caller": mask(last4),
             "ended": ended,
+            "mode": mode,                                        # which line answered: "conversation" or "tree" (a tree call that went on to the representative says so in `events`)
             "duration_seconds": round(duration_seconds, 1),
             "reply_latency_ms": reply_latency_ms or [],          # per reply: end-of-speech signal to first audio (the signal comes about 0.3 s after the caller stops)
             "stated_figures": stated,
             "ungrounded_figures": [f"{index}: {figure}" for index, figure in check_turns(turns)],
+            "events": events or [],                              # the phone tree's path: each node visited, key pressed, entry made and failure
             "turns": turns,
         }
         self._dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -83,7 +85,7 @@ class CallLog:
         for path in self._files()[:limit]:
             record = json.loads(path.read_text(encoding="utf-8"))
             latencies = record.get("reply_latency_ms") or []
-            out.append({key: record[key] for key in ("time", "reference", "caller", "ended", "duration_seconds")} | {
+            out.append({key: record[key] for key in ("time", "reference", "caller", "ended", "duration_seconds")} | {"mode": record.get("mode", "conversation"),
                 "turns": len(record["turns"]), "ungrounded": len(record["ungrounded_figures"]),
                 "latency_median_ms": sorted(latencies)[len(latencies) // 2] if latencies else None, "latency_max_ms": max(latencies) if latencies else None})
         return out

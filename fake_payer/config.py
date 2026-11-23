@@ -10,6 +10,7 @@ from dataclasses import dataclass, fields
 from typing import Mapping, Optional
 
 REQUIRED = ("SONIOX_API_KEY", "ANTHROPIC_API_KEY", "FAKE_PAYER_NUMBER", "ANSWER_KEY")
+LINE_MODES = ("conversation", "tree", "mixed")
 _SECRETS = ("soniox_api_key", "anthropic_api_key", "answer_key")
 
 
@@ -47,6 +48,8 @@ class Config:
     reply_delay_seconds: float = 2.0              # the least time from the caller finishing to the first sound of the reply
     answer_delay_seconds: float = 2.0             # silence between the last ring and the greeting
     ring_count: int = 2                           # rings the caller hears before the line answers; 0 answers at once
+    line_mode: str = "mixed"                      # "conversation": the representative answers every call; "tree": the phone tree does; "mixed": each call is either, at random
+    tree_fraction: float = 0.5                    # in "mixed", the share of calls the phone tree answers (0 to 1)
 
     def __repr__(self) -> str:
         shown = {f.name: ("<set>" if f.name in _SECRETS else getattr(self, f.name)) for f in fields(self)}
@@ -87,6 +90,17 @@ class Config:
             raise ConfigError("MAX_CALL_SECONDS must be a whole number of seconds, or 0 for no limit")
         max_call_seconds = int(raw_max)
 
+        line_mode = (env.get("LINE_MODE") or "mixed").strip().lower()
+        if line_mode not in LINE_MODES:
+            raise ConfigError("LINE_MODE must be conversation, tree or mixed")
+        raw_fraction = (env.get("TREE_FRACTION") or "").strip() or "0.5"
+        try:
+            tree_fraction = float(raw_fraction)
+        except ValueError:
+            raise ConfigError("TREE_FRACTION is not a valid number") from None
+        if not 0 <= tree_fraction <= 1:
+            raise ConfigError("TREE_FRACTION must be from 0 to 1")
+
         def number(name: str, default, kind):
             raw = (env.get(name) or "").strip()
             if not raw:
@@ -118,6 +132,8 @@ class Config:
             audio_cache_dir=(env.get("AUDIO_CACHE_DIR") or "audio_cache").strip(),
             tts_model=(env.get("SONIOX_TTS_MODEL") or "tts-rt-v1").strip(),
             ring_count=ring_count,
+            line_mode=line_mode,
+            tree_fraction=tree_fraction,
             answer_delay_seconds=answer_delay,
             reply_delay_seconds=reply_delay,
             keep_the_floor=(env.get("KEEP_THE_FLOOR") or "1").strip().lower() not in ("0", "false", "no"),

@@ -33,3 +33,19 @@ def ringback_pcm(rings: int) -> bytes:
         tone += struct.pack("<h", value)
     gap = bytes(int(RING_GAP_SECONDS * SAMPLE_RATE) * 2)
     return gap.join([bytes(tone)] * rings)
+
+
+_MELODY_HZ = (392.0, 494.0, 587.0, 494.0, 440.0, 523.0, 659.0, 523.0)       # a slow, plain tune: the line's hold music
+NOTE_SECONDS = 0.5
+
+
+def hold_music_pcm(seconds: float) -> bytes:
+    """`seconds` of the hold music: the same eight soft notes over and over, each with a short fade so there is no click."""
+    total = int(seconds * SAMPLE_RATE)
+    note_length = int(NOTE_SECONDS * SAMPLE_RATE)
+    out = bytearray()
+    for n in range(total):
+        index, within = divmod(n, note_length)
+        edge = min(1.0, within / 200, (note_length - within) / 200)
+        out += struct.pack("<h", int(3500 * edge * math.sin(2 * math.pi * _MELODY_HZ[index % len(_MELODY_HZ)] * n / SAMPLE_RATE)))
+    return bytes(out)
