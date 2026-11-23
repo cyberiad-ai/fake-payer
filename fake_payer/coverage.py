@@ -67,7 +67,7 @@ class Fixture:
     groups: Dict[str, Dict[str, Any]]
     categories: List[str]
     standing_answers: Dict[str, str] = field(default_factory=dict)
-    benefit_answers: List[Dict[str, str]] = field(default_factory=list)       # [{question, answer}]: what the line says to each question of a practice's verification form
+    benefit_answers: List[Dict[str, str]] = field(default_factory=list)       # [{question, answer, topic}]: what the line says to each question of a practice's verification form
 
     @classmethod
     def load(cls, path: Path = FIXTURE_PATH) -> "Fixture":
@@ -110,9 +110,16 @@ class Fixture:
                     raise FixtureError(f"member {member_id}: used lists unknown code {code}")
         return cls(plans=plans, procedures=procedures, members=members, groups=groups, categories=categories,
                    standing_answers={str(k): str(v) for k, v in (raw.get("standing_answers") or {}).items()},
-                   benefit_answers=[{"question": str(e["question"]), "answer": str(e["answer"])} for e in (raw.get("benefit_answers") or [])])
+                   benefit_answers=[{"question": str(e["question"]), "answer": str(e["answer"]), "topic": str(e.get("topic") or "other")} for e in (raw.get("benefit_answers") or [])])
 
     # ---- the form's questions -------------------------------------------------
+
+    def benefit_topics(self) -> Dict[str, List[Dict[str, str]]]:
+        """The form's questions grouped by topic, in file order: what the phone tree's menus are built from."""
+        out: Dict[str, List[Dict[str, str]]] = {}
+        for entry in self.benefit_answers:
+            out.setdefault(entry["topic"], []).append({"question": entry["question"], "answer": entry["answer"]})
+        return out
 
     def answer_questions(self, question: Any, limit: int = 3) -> List[Dict[str, str]]:
         """The entries whose question is closest to what was asked: the most words in common (a word and its plural count as one), best first. Nothing in common, nothing back."""
@@ -123,7 +130,7 @@ class Fixture:
             if common:
                 scored.append((len(common & _stems(entry["question"])) * 2 + len(common), entry))
         scored.sort(key=lambda pair: -pair[0])
-        return [entry for _score, entry in scored[:limit]]
+        return [{"question": entry["question"], "answer": entry["answer"]} for _score, entry in scored[:limit]]
 
     # ---- finding the member ---------------------------------------------------
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .config import Config, ConfigError
 from .prompts import Prompts
+from .coverage import Fixture
 from .refusals import Refusals
 from .server import FakePayerServer
 from .tree import PhoneTree
@@ -24,10 +25,8 @@ def _load_dotenv(path: Path) -> None:
 async def _run(config: Config) -> None:
     refusals = Refusals()
     await refusals.prepare(config)                      # the spoken refusals, from the cache or synthesized once
-    tree, prompts = PhoneTree.load(), Prompts(config)
-    if config.line_mode != "conversation":
-        await prompts.prepare(tree.texts())             # the tree's fixed lines, from the cache or synthesized once
-    server = FakePayerServer(config, refusals=refusals, tree=tree, prompts=prompts)
+    fixture, tree, prompts = Fixture.load(), PhoneTree.load(), Prompts(config)
+    server = FakePayerServer(config, refusals=refusals, tree=tree, prompts=prompts, fixture=fixture)
 
     async def keep_log_tidy() -> None:
         while True:
@@ -37,12 +36,19 @@ async def _run(config: Config) -> None:
             await asyncio.sleep(6 * 3600)
 
     tidy = asyncio.create_task(keep_log_tidy())
+    preparing = None
+    if config.line_mode != "conversation":
+        # The tree's spoken lines (a couple of hundred) are made in the background, a few at a time, while the line already takes calls; one not ready when a caller needs it is
+        # made then. Once made they are kept in AUDIO_CACHE_DIR, so only the first start after a change to the tree or fixture is slow.
+        preparing = asyncio.create_task(prompts.prepare(tree.texts(fixture)))
     try:
         async with server.serve() as running:
             logging.getLogger("fake_payer").info("listening on %s:%s", config.listen_host, config.port)
             await running.serve_forever()
     finally:
         tidy.cancel()
+        if preparing:
+            preparing.cancel()
 
 
 def main() -> int:

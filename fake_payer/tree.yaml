@@ -6,6 +6,8 @@
 #             failure ("invalid" / "timeout" lines are said and the menu starts again); after `max_failures` the line goes to `giveup`.
 #   collect   says `say`, then collects `length` digits into `field` (a key press during the prompt counts). `*` goes to `star_to` if there is one. `check: date` wants
 #             MMDDYYYY and says `invalid` if it is not a real date. Goes to `next`.
+#   form      reads out the practice's verification-form questions of one fixture `topic`, seven to a page; a question's key says its answer, 9 turns the page, * goes to
+#             `back`. The topics are the fixture's (`benefit_answers`); the tree and the fixture must agree on them (PhoneTree.check_against).
 #   action    does what `action` names (see ACTIONS in tree.py), says what it returns, then goes to the node `routes` gives for its outcome.
 #   hold      plays hold music for `seconds` (the caller's keys are ignored), then goes to `next`.
 #   transfer  says `say`, then hands the call to the representative (the conversational line).
@@ -16,7 +18,7 @@
 # the main menu; provider enrollment is a loop with no way forward; a supervisor never comes; a wrong date of birth is refused (three tries, then the call ends).
 
 settings:
-  entry_timeout_seconds: 8
+  entry_timeout_seconds: 12
   max_failures: 3
   hold_seconds: 8
   giveup: no_entry                     # where a menu or entry goes after max_failures failures in a row (a node may name its own `giveup`)
@@ -35,8 +37,9 @@ nodes:
     type: menu
     say: >-
       For eligibility and benefits, press 1. For claim status, press 2. For fax numbers and mailing addresses, press 3. For provider enrollment, press 4.
-      To speak with a supervisor, press 5. To speak with a representative, press 0. To hear these options again, press 9.
-    options: {"1": ask_member, "2": claims, "3": addresses, "4": enrollment, "5": supervisor, "0": representative, "9": main}
+      To speak with a supervisor, press 5. For plan questions, press 6. For plan benefits by group number, press 7. For a reference number for this call, press 8.
+      To speak with a representative, press 0. To hear these options again, press 9.
+    options: {"1": ask_member, "2": claims, "3": addresses, "4": enrollment, "5": supervisor, "6": forms, "7": ask_group, "8": reference, "0": representative, "9": main}
     invalid: That is not a valid option.
     timeout: We did not receive your entry.
 
@@ -92,10 +95,12 @@ nodes:
     type: menu
     say: >-
       For eligibility dates, press 1. For the annual maximum and deductible, press 2. For coverage percentages, press 3. For waiting periods, press 4.
-      To check another member, press 7. To return to the main menu, press star. To hear these options again, press 9.
-    options: {"1": eligibility, "2": maximum, "3": percentages, "4": waiting, "7": ask_member, "*": main, "9": member_menu}
+      For covered services and their limits, press 5. To check a procedure code, press 6. For plan questions, press 8. To check another member, press 7.
+      To return to the main menu, press star. To hear these options again, press 9.
+    options: {"1": eligibility, "2": maximum, "3": percentages, "4": waiting, "5": services_menu, "6": ask_code, "7": ask_member, "8": forms, "*": main, "9": member_menu}
     invalid: That is not a valid option.
     timeout: We did not receive your entry.
+    giveup: no_entry
 
   eligibility:
     type: action
@@ -116,6 +121,149 @@ nodes:
     type: action
     action: say_waiting
     routes: {done: member_menu}
+
+  services_menu:
+    type: menu
+    say: For preventive services, press 1. For basic services, press 2. For major services, press 3. For orthodontics, press 4. To go back, press star.
+    options: {"1": services_preventive, "2": services_basic, "3": services_major, "4": services_orthodontics, "*": member_menu}
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  services_preventive:
+    type: action
+    action: say_services
+    args: {category: preventive}
+    routes: {done: services_menu}
+
+  services_basic:
+    type: action
+    action: say_services
+    args: {category: basic}
+    routes: {done: services_menu}
+
+  services_major:
+    type: action
+    action: say_services
+    args: {category: major}
+    routes: {done: services_menu}
+
+  services_orthodontics:
+    type: action
+    action: say_services
+    args: {category: orthodontics}
+    routes: {done: services_menu}
+
+  ask_code:
+    type: collect
+    field: code
+    length: 4
+    say: Please enter the four digits of the procedure code, without the letter D. To go back, press star.
+    star_to: member_menu
+    next: check_code
+    invalid: That procedure code is not complete.
+
+  check_code:
+    type: action
+    action: say_procedure
+    routes: {done: member_menu}
+
+  # ---- benefits by group number, with no member ---------------------------------------------------------------------------------------------
+
+  ask_group:
+    type: collect
+    field: group
+    length: 5
+    say: Please enter the five digit group number, without the letter G. To return to the main menu, press star.
+    star_to: main
+    next: verify_group
+    invalid: That group number is not complete.
+
+  verify_group:
+    type: action
+    action: verify_group
+    routes: {found: member_menu, unverified: group_not_found, giveup: cannot_find_group}
+
+  group_not_found:
+    type: say
+    say: We could not find that group number. Let's try again.
+    next: ask_group
+
+  cannot_find_group:
+    type: hangup
+    say: We are unable to find that group. Please check the group number and call back. Goodbye.
+
+  # ---- the practice's verification-form questions, by topic; no member is needed ----------------------------------------------------------------
+
+  forms:
+    type: menu
+    say: >-
+      For plan and network questions, press 1. For maximums, deductibles and percentages, press 2. For exams, x-rays and preventive care, press 3.
+      For periodontal care, press 4. For fillings, crowns and other restorative care, press 5. For orthodontics, press 6. For history on file, press 7.
+      To return to the main menu, press star.
+    options: {"1": form_plan, "2": form_amounts, "3": form_preventive, "4": form_perio, "5": form_restorative, "6": form_ortho, "7": form_history, "*": main, "9": forms}
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  form_plan:
+    type: form
+    topic: plan
+    back: forms
+    say: "Plan and network questions."
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  form_amounts:
+    type: form
+    topic: amounts
+    back: forms
+    say: "Maximums, deductibles and percentages."
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  form_preventive:
+    type: form
+    topic: preventive
+    back: forms
+    say: "Exams, x-rays and preventive care."
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  form_perio:
+    type: form
+    topic: perio
+    back: forms
+    say: "Periodontal care."
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  form_restorative:
+    type: form
+    topic: restorative
+    back: forms
+    say: "Fillings, crowns and other restorative care."
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  form_ortho:
+    type: form
+    topic: ortho
+    back: forms
+    say: "Orthodontics."
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  form_history:
+    type: form
+    topic: history
+    back: forms
+    say: "History on file."
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  reference:
+    type: action
+    action: say_reference
+    routes: {done: main}
 
   goodbye:
     type: hangup

@@ -63,3 +63,10 @@ def test_a_broken_fixture_is_refused_with_the_reason(tmp_path, change, message):
     with pytest.raises(FixtureError) as error:
         Fixture.load(write(tmp_path, data))
     assert message in str(error.value)
+
+
+def test_every_form_answer_has_a_topic_and_the_model_is_not_given_it():
+    from fake_payer.coverage import Fixture
+    fixture = Fixture.load()
+    assert all(entry["topic"] != "other" for entry in fixture.benefit_answers)
+    assert all(set(e) == {"question", "answer"} for e in fixture.answer_questions("annual maximum deductible"))

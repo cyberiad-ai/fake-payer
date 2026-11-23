@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 
 _ONES = ("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen").split()
 _TENS = ("", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety")
@@ -58,3 +59,16 @@ def date_words(iso: str) -> str:
 def digits_spoken(digits: str) -> str:
     """"100001" as "one zero zero zero zero one"."""
     return " ".join(_ONES[int(c)] for c in digits if c.isdigit())
+
+
+def numbers_in_words(text: str) -> str:
+    """"3 years" as "three years": every whole number in the text (up to 9999) written out."""
+    return re.sub(r"\d{1,4}", lambda m: number_words(int(m.group())), text)
+
+
+def spoken_question(question: str) -> str:
+    """A form question as it is read out in a menu: "Sealants D1351: coverage %" as "Sealants D one three five one: coverage percent"."""
+    text = re.sub(r"\s*\(([^)]*)\)", r", \1", question)
+    text = re.sub(r"\bD(\d{4})\b", lambda m: "D " + digits_spoken(m.group(1)), text)
+    text = text.replace("%", " percent").replace("$", " dollars").replace("/", " or ")
+    return re.sub(r"\s+", " ", text).strip()

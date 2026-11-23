@@ -33,3 +33,12 @@ def test_dates_are_said_as_a_person_would(iso, words):
 def test_digits_are_said_one_at_a_time():
     assert digits_spoken("100001") == "one zero zero zero zero one"
     assert digits_spoken("1-2") == "one two"
+
+
+def test_a_form_question_is_read_the_way_it_is_said():
+    from fake_payer.speech_text import numbers_in_words, spoken_question
+    assert spoken_question("Sealants D1351: coverage %") == "Sealants D one three five one: coverage percent"
+    assert spoken_question("Bitewings D0272/D0274: how often is it covered?") == "Bitewings D zero two seven two or D zero two seven four: how often is it covered?"
+    assert spoken_question("Annual maximum (and how much is used)") == "Annual maximum, and how much is used"
+    assert spoken_question("Ortho maximum $ (and how much is used)") == "Ortho maximum dollars, and how much is used"
+    assert numbers_in_words("3 years") == "three years" and numbers_in_words("calendar year") == "calendar year"

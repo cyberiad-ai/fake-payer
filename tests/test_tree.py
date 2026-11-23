@@ -217,10 +217,10 @@ async def test_claim_status_is_a_dead_end_that_hangs_up():
 
 
 async def test_an_invalid_key_is_said_so_and_the_menu_starts_again_then_the_call_ends():
-    result, call = await walk([("press 1", "8"), ("not a valid option", None), ("press 1", "7"), ("press 1", "6")], tree=small())
+    result, call = await walk([("press 1", "#"), ("not a valid option", None), ("press 1", "*"), ("press 1", "#")], tree=small())
     assert result.outcome == "hangup" and call.said[-1] == "We did not receive a valid entry. Goodbye."
     assert sum(1 for line in call.said if line == "That is not a valid option.") == 2
-    assert [e["key"] for e in result.events if e.get("failure") == "invalid"] == ["8", "7", "6"]
+    assert [e["key"] for e in result.events if e.get("failure") == "invalid"] == ["#", "*", "#"]
 
 
 async def test_silence_is_said_so_and_after_three_the_call_ends():
@@ -231,7 +231,7 @@ async def test_silence_is_said_so_and_after_three_the_call_ends():
 
 
 async def test_a_good_key_after_a_failure_clears_the_count():
-    result, call = await walk([("press 1", "8"), ("press 1", "2")], tree=small())
+    result, call = await walk([("press 1", "#"), ("press 1", "2")], tree=small())
     assert call.said[-1].startswith("Claim status is not available")
 
 
