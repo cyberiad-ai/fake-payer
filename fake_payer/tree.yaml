@@ -1,0 +1,176 @@
+# The phone tree: what a caller hears and presses when the line answers as a menu. Everything here is made up, like the rest of the line.
+#
+# Node types:
+#   say       says `say`, then goes to `next`.
+#   menu      says `say`, then waits for a key; `options` maps a key (0-9, *, #) to the next node. A key that is not listed, or no key in `entry_timeout_seconds`, is a
+#             failure ("invalid" / "timeout" lines are said and the menu starts again); after `max_failures` the line goes to `giveup`.
+#   collect   says `say`, then collects `length` digits into `field` (a key press during the prompt counts). `*` goes to `star_to` if there is one. `check: date` wants
+#             MMDDYYYY and says `invalid` if it is not a real date. Goes to `next`.
+#   action    does what `action` names (see ACTIONS in tree.py), says what it returns, then goes to the node `routes` gives for its outcome.
+#   hold      plays hold music for `seconds` (the caller's keys are ignored), then goes to `next`.
+#   transfer  says `say`, then hands the call to the representative (the conversational line).
+#   hangup    says `say` (if any), then hangs up.
+# Text may not contain braces. Keys are quoted so YAML keeps them as text.
+#
+# The dead ends and bad paths are on purpose, so an automated caller can be tested against them: claim status says it cannot help and hangs up; the fax option goes round to
+# the main menu; provider enrollment is a loop with no way forward; a supervisor never comes; a wrong date of birth is refused (three tries, then the call ends).
+
+settings:
+  entry_timeout_seconds: 8
+  max_failures: 3
+  hold_seconds: 8
+  giveup: no_entry                     # where a menu or entry goes after max_failures failures in a row (a node may name its own `giveup`)
+
+start: greeting
+
+nodes:
+  greeting:
+    type: say
+    say: >-
+      Thank you for calling Acme Dental Benefits, provider services. This is a fictional insurance line used for testing, and this call is recorded.
+      Please listen carefully, as our menu options have changed.
+    next: main
+
+  main:
+    type: menu
+    say: >-
+      For eligibility and benefits, press 1. For claim status, press 2. For fax numbers and mailing addresses, press 3. For provider enrollment, press 4.
+      To speak with a supervisor, press 5. To speak with a representative, press 0. To hear these options again, press 9.
+    options: {"1": ask_member, "2": claims, "3": addresses, "4": enrollment, "5": supervisor, "0": representative, "9": main}
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  no_entry:
+    type: hangup
+    say: We did not receive a valid entry. Goodbye.
+
+  # ---- eligibility and benefits: the part of the tree that answers ------------------------------------------------------------------------
+
+  ask_member:
+    type: collect
+    field: member
+    length: 6
+    say: Please enter the six digit member I D, without the letter M. To return to the main menu, press star.
+    star_to: main
+    next: ask_dob
+    invalid: That member I D is not complete.
+
+  ask_dob:
+    type: collect
+    field: dob
+    length: 8
+    check: date
+    say: >-
+      Please enter the patient's date of birth: two digits for the month, two for the day, and four for the year. For example, March fourteenth, nineteen eighty-five,
+      is zero three, one four, one nine eight five.
+    star_to: main
+    next: verify
+    invalid: That is not a valid date.
+
+  verify:
+    type: action
+    action: verify_member
+    routes: {verified: member_menu, terminated: after_terminated, unverified: not_verified, giveup: cannot_verify}
+
+  not_verified:
+    type: say
+    say: We could not verify the member with that information. Let's try again.
+    next: ask_member
+
+  cannot_verify:
+    type: hangup
+    say: We are unable to verify the member. Please check the member's card and call back. Goodbye.
+
+  after_terminated:
+    type: menu
+    say: To check another member, press 1. To return to the main menu, press 2. To end this call, press 3.
+    options: {"1": ask_member, "2": main, "3": goodbye}
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  member_menu:
+    type: menu
+    say: >-
+      For eligibility dates, press 1. For the annual maximum and deductible, press 2. For coverage percentages, press 3. For waiting periods, press 4.
+      To check another member, press 7. To return to the main menu, press star. To hear these options again, press 9.
+    options: {"1": eligibility, "2": maximum, "3": percentages, "4": waiting, "7": ask_member, "*": main, "9": member_menu}
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  eligibility:
+    type: action
+    action: say_eligibility
+    routes: {done: member_menu}
+
+  maximum:
+    type: action
+    action: say_maximum
+    routes: {done: member_menu}
+
+  percentages:
+    type: action
+    action: say_percentages
+    routes: {done: member_menu}
+
+  waiting:
+    type: action
+    action: say_waiting
+    routes: {done: member_menu}
+
+  goodbye:
+    type: hangup
+    say: Thank you for calling. Goodbye.
+
+  # ---- dead ends and bad paths ------------------------------------------------------------------------------------------------------------
+
+  claims:
+    type: hangup
+    say: Claim status is not available on this line. To check a claim, please use the provider portal. Goodbye.
+
+  addresses:
+    type: say
+    say: Claims may be mailed to the address printed on the back of the member's card. Fax numbers are not available on this line.
+    next: main
+
+  enrollment:
+    type: menu
+    say: To enroll a new provider, press 1. To update an existing provider, press 2. To return to the main menu, press 3.
+    options: {"1": enroll_new, "2": enroll_update, "3": main}
+    invalid: That is not a valid option.
+    timeout: We did not receive your entry.
+
+  enroll_new:
+    type: say
+    say: New provider enrollment is handled by our credentialing department, which is closed. Please call back during business hours.
+    next: enrollment
+
+  enroll_update:
+    type: say
+    say: To update an existing provider, the provider must first be enrolled as a new provider.
+    next: enrollment
+
+  supervisor:
+    type: say
+    say: Please hold for the next available supervisor.
+    next: supervisor_hold
+
+  supervisor_hold:
+    type: hold
+    next: supervisor_gone
+
+  supervisor_gone:
+    type: hangup
+    say: All of our supervisors are busy. Please try your call again later. Goodbye.
+
+  representative:
+    type: say
+    say: Please hold for the next available representative.
+    next: representative_hold
+
+  representative_hold:
+    type: hold
+    next: representative_transfer
+
+  representative_transfer:
+    type: transfer
+    say: Thank you for holding.

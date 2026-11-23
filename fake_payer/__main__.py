@@ -5,8 +5,10 @@ import os
 from pathlib import Path
 
 from .config import Config, ConfigError
+from .prompts import Prompts
 from .refusals import Refusals
 from .server import FakePayerServer
+from .tree import PhoneTree
 
 
 def _load_dotenv(path: Path) -> None:
@@ -22,7 +24,10 @@ def _load_dotenv(path: Path) -> None:
 async def _run(config: Config) -> None:
     refusals = Refusals()
     await refusals.prepare(config)                      # the spoken refusals, from the cache or synthesized once
-    server = FakePayerServer(config, refusals=refusals)
+    tree, prompts = PhoneTree.load(), Prompts(config)
+    if config.line_mode != "conversation":
+        await prompts.prepare(tree.texts())             # the tree's fixed lines, from the cache or synthesized once
+    server = FakePayerServer(config, refusals=refusals, tree=tree, prompts=prompts)
 
     async def keep_log_tidy() -> None:
         while True:

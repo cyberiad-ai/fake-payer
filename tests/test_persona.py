@@ -2,6 +2,7 @@
 import asyncio
 
 from fake_payer.persona import DISCLOSURE, PROVIDER_NAME, build_system_prompt
+from fake_payer.pronunciation import respell
 from fake_payer.real_data_check import scan_text
 
 
@@ -36,7 +37,7 @@ def test_the_bridge_begins_every_call_with_the_disclosure(monkeypatch):
         return bridge
 
     bridge = asyncio.run(run())
-    assert made["tts"].synthesized == [DISCLOSURE] and bridge.transcript[0].text == DISCLOSURE
+    assert made["tts"].synthesized == [respell(DISCLOSURE)] and bridge.transcript[0].text == DISCLOSURE
 
 
 def test_the_call_reference_is_eight_digits_stable_within_a_call_and_different_between_calls():

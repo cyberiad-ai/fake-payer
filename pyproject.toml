@@ -16,4 +16,4 @@ asyncio_mode = "auto"
 packages = ["fake_payer"]
 
 [tool.setuptools.package-data]
-fake_payer = ["fixture.yaml"]
+fake_payer = ["fixture.yaml", "tree.yaml"]

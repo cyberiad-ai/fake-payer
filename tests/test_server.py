@@ -10,12 +10,14 @@ from fake_payer import bridge as bridge_module
 from fake_payer.anthropic_streaming_client import StreamedAssistantMessage
 from fake_payer.config import Config
 from fake_payer.persona import DISCLOSURE
+from fake_payer.pronunciation import respell
 from fake_payer.server import FakePayerServer
 from fake_payer.soniox_streaming_client import STTFinalTranscript, STTSpeechEnded, STTSpeechStarted, TTSAudioChunk, TTSSynthesisComplete
 from tests.test_bridge import FakeSTT, FakeTTS, until
 
 KEY = "test-answer-key-0123456789"
-CONFIG = Config.from_env({"SONIOX_API_KEY": "k", "ANTHROPIC_API_KEY": "m", "FAKE_PAYER_NUMBER": "+12025550123", "ANSWER_KEY": KEY, "RING_COUNT": "0", "ANSWER_DELAY_SECONDS": "0", "REPLY_DELAY_SECONDS": "0"})
+CONFIG = Config.from_env({"SONIOX_API_KEY": "k", "ANTHROPIC_API_KEY": "m", "FAKE_PAYER_NUMBER": "+12025550123", "ANSWER_KEY": KEY, "RING_COUNT": "0", "ANSWER_DELAY_SECONDS": "0", "REPLY_DELAY_SECONDS": "0",
+                          "LINE_MODE": "conversation"})
 
 
 async def http_get(port, path, host="line.example.org"):
@@ -101,7 +103,7 @@ async def test_a_call_gets_the_disclosure_and_audio_flows_both_ways(legs):
     try:
         async with connect(await ws_url(port, "call-1")) as call:
             await until(lambda: "tts" in legs and legs["tts"].synthesized)
-            assert legs["tts"].synthesized == [DISCLOSURE]
+            assert legs["tts"].synthesized == [respell(DISCLOSURE)]       # the voice is given the respelled name
             await call.send(json.dumps({"event": "websocket:connected"}))      # a control frame: no audio
             await call.send(b"\x00\x01" * 160)                                  # the caller's audio
             await until(lambda: legs["stt"].audio)
@@ -198,7 +200,7 @@ async def test_the_audio_websocket_cannot_be_opened_without_going_through_the_an
 
 
 def limited_config(**env):
-    return Config.from_env({"SONIOX_API_KEY": "k", "ANTHROPIC_API_KEY": "m", "FAKE_PAYER_NUMBER": "+12025550123", "ANSWER_KEY": KEY, "RING_COUNT": "0", "ANSWER_DELAY_SECONDS": "0", "REPLY_DELAY_SECONDS": "0", **env})
+    return Config.from_env({"SONIOX_API_KEY": "k", "ANTHROPIC_API_KEY": "m", "FAKE_PAYER_NUMBER": "+12025550123", "ANSWER_KEY": KEY, "RING_COUNT": "0", "ANSWER_DELAY_SECONDS": "0", "REPLY_DELAY_SECONDS": "0", "LINE_MODE": "conversation", **env})
 
 
 def refusal_audio():
