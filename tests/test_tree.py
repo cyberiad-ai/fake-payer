@@ -109,10 +109,10 @@ def broken(**changes):
     (broken(main={"type": "menu", "say": "use {braces}", "options": {"1": "main"}}), "braces"),
     (broken(main={"type": "door", "say": "x"}), "type must be one of"),
     (broken(claims=None), "no node called 'claims'"),
-    (broken(verify={"type": "action", "action": "verify_member", "routes": {"verified": "main"}}), "routes must cover exactly"),
-    (broken(verify={"type": "action", "action": "do_magic", "routes": {}}), "action must be one of"),
-    (broken(ask_member={"type": "collect", "field": "member", "length": 0, "say": "x", "next": "ask_dob"}), "length"),
-    (broken(ask_dob={"type": "collect", "field": "dob", "length": 6, "check": "date", "say": "x", "next": "verify"}), "a date is eight digits"),
+    (broken(verify_group={"type": "action", "action": "verify_group", "routes": {"found": "main"}}), "routes must cover exactly"),
+    (broken(verify_group={"type": "action", "action": "do_magic", "routes": {}}), "action must be one of"),
+    (broken(ask_group={"type": "collect", "field": "group", "length": 0, "say": "x", "next": "verify_group"}), "length"),
+    (broken(ask_group={"type": "collect", "field": "group", "length": 6, "check": "date", "say": "x", "next": "verify_group"}), "a date is eight digits"),
     (broken(orphan={"type": "hangup", "say": "x"}), "not reachable from the start: orphan"),
 ])
 def test_a_tree_with_a_fault_is_refused(raw, message):
@@ -128,7 +128,7 @@ def test_a_menu_without_anywhere_to_go_when_it_gives_up_is_refused():
 
 
 def test_the_actions_declare_the_outcomes_the_file_must_route():
-    assert ACTIONS["verify_member"][1] == {"verified", "terminated", "unverified", "giveup"}
+    assert ACTIONS["verify_group"][1] == {"found", "unverified", "giveup"}
 
 
 # ---- walking it ----------------------------------------------------------------------------------------------------------------------
@@ -140,59 +140,12 @@ async def test_the_greeting_and_the_main_menu_are_said_and_a_hang_up_ends_the_ca
     assert call.said[1].startswith("For eligibility and benefits, press 1")
 
 
-async def test_a_member_is_found_by_keypad_and_the_answers_come_from_the_lookup():
-    script = ([("press 1", "1")] + enter("six digit member", "100001") + enter("date of birth", "03141985", "Thank you. I found Pat Sample") +
-              [("For eligibility dates", "1"), ("effective January first", None), ("For eligibility dates", "2"), ("annual maximum is", None), ("For eligibility dates", "3"),
-               ("Orthodontics is covered", None), ("For eligibility dates", "4"), ("Waiting periods", None), ("For eligibility dates", "*"), ("press 1", None)])
-    result, call = await walk(script, tree=small(), hang_up_after=True)
-    said = " | ".join(call.said)
-    assert result.outcome == "caller_gone"
-    assert "Coverage for Pat Sample is active, effective January first, twenty twenty-five. The plan is Acme Gold Dental." in said
-    assert "The annual maximum is one thousand five hundred dollars, with one thousand five hundred dollars remaining. The deductible is fifty dollars, with fifty dollars still" in said
-    assert "Preventive care is covered at one hundred percent. Basic services is covered at eighty percent. Major services is covered at fifty percent." in said
-    assert "Waiting periods. Preventive care: no waiting period. Basic services: six months. Major services: twelve months. Orthodontics: twelve months." in said
-    assert "The orthodontic lifetime maximum is one thousand five hundred dollars." in said
-    assert [e["digits"] for e in result.events if "digits" in e] == ["100001", "03141985"]
-    assert [e["entered"] for e in result.events if "entered" in e] == ["member", "dob"]
-
-
-async def test_the_figures_are_the_ones_the_conversational_line_would_give():
-    plan = FIXTURE.lookup(member_id="M100002", date_of_birth="1990-07-02")["plan"]
-    assert plan["annual_maximum_remaining"] == 1320 and plan["deductible_remaining"] == 0
-    script = [("press 1", "1")] + enter("six digit member", "100002") + enter("date of birth", "07021990", "I found Robin Example") + [("For eligibility dates", "2"), ("annual", None)]
-    result, call = await walk(script, tree=small(), hang_up_after=True)
-    assert any("with one thousand three hundred twenty dollars remaining. The deductible is fifty dollars, and it has been met." in line for line in call.said)
-
-
-async def test_a_terminated_member_gets_the_end_date_and_no_benefits():
-    script = ([("press 1", "1")] + enter("six digit member", "100003") +
-              enter("date of birth", "11301978", "Coverage for Casey Placeholder ended on June thirtieth, twenty twenty-six") + [("To check another member", "3")])
-    result, call = await walk(script, tree=small())
-    assert result.outcome == "hangup" and call.said[-1] == "Thank you for calling. Goodbye."
-    assert not any("annual maximum" in line for line in call.said)
-
-
-async def test_a_wrong_date_of_birth_is_refused_and_after_three_tries_the_call_ends():
-    def attempt(then=None):
-        return enter("six digit member", "100001") + enter("date of birth", "01011999", then)
-
-    script = [("press 1", "1")] + attempt("We could not verify the member") + attempt("We could not verify the member") + attempt()
-    result, call = await walk(script, tree=small())
-    assert result.outcome == "hangup" and call.said[-1].startswith("We are unable to verify the member")
-    assert sum(1 for line in call.said if line.startswith("We could not verify")) == 2
-
-
-async def test_an_impossible_date_is_refused_and_asked_for_again():
-    script = ([("press 1", "1")] + enter("six digit member", "100001") + enter("date of birth", "13452000", "That is not a valid date") +
-              enter("date of birth", "03141985", "I found Pat Sample"))
-    result, call = await walk(script, tree=small(), hang_up_after=True)
-    assert "That is not a valid date." in call.said and any("I found Pat Sample" in line for line in call.said)
-    assert any(e.get("failure") == "invalid" for e in result.events)
-
-
-async def test_star_during_an_entry_goes_back_to_the_main_menu():
-    result, call = await walk([("press 1", "1"), ("six digit member", "*"), ("press 1", None)], tree=small(), hang_up_after=True)
-    assert sum(1 for line in call.said if line.startswith("For eligibility and benefits")) == 2
+async def test_eligibility_and_benefits_is_also_a_hold_and_then_a_transfer_to_the_conversational_line():
+    # 2026-11-25: the self-service member-ID/DOB lookup this used to lead to is gone -- the platform agent is
+    # built around a back-and-forth conversation, not a numbered self-service benefits menu, so option 1 now
+    # goes straight to the same conversational line "speak with a representative" (option 0) already used.
+    result, call = await walk([("press 1", "1")], tree=small())
+    assert result.outcome == "transfer" and call.hold_frames > 0 and call.said[-1] == "Thank you for holding."
 
 
 async def test_pressing_a_key_during_a_prompt_cuts_it_off():
@@ -266,7 +219,7 @@ async def test_a_representative_is_a_hold_and_then_a_transfer_to_the_conversatio
 
 
 async def test_the_caller_hanging_up_at_any_point_ends_the_walk():
-    result, call = await walk([("press 1", "1"), ("six digit member", None)], tree=small(), hang_up_after=True)
+    result, call = await walk([("press 1", "7"), ("five digit group number", None)], tree=small(), hang_up_after=True)
     assert result.outcome == "caller_gone"
 
 

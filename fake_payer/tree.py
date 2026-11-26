@@ -73,20 +73,6 @@ def _failed(ctx: ActionContext) -> str:
     return "giveup" if ctx.session.attempts >= ctx.max_failures else "unverified"
 
 
-def _verify_member(ctx: ActionContext) -> Tuple[str, Optional[str]]:
-    digits, dob = ctx.session.fields["member"], ctx.session.fields["dob"]
-    identity = {"member_id": "M" + digits, "date_of_birth": f"{dob[4:]}-{dob[:2]}-{dob[2:4]}"}
-    result = ctx.fixture.lookup(**identity)
-    if not result.get("verified"):
-        return _failed(ctx), None
-    ctx.session.attempts = 0
-    ctx.session.lookup, ctx.session.identity = result, identity
-    eligibility = result["eligibility"]
-    if eligibility["status"] == "terminated":
-        return "terminated", f"Coverage for {_who(result)} ended on {date_words(eligibility['termination_date'])}. No benefit information is available."
-    return "verified", f"Thank you. I found {_who(result)}. Coverage is active."
-
-
 def _verify_group(ctx: ActionContext) -> Tuple[str, Optional[str]]:
     result = ctx.fixture.lookup(group_number="G" + ctx.session.fields["group"])
     if not result.get("plan_level_only"):
@@ -182,7 +168,6 @@ def _say_reference(ctx: ActionContext) -> Tuple[str, Optional[str]]:
 
 Action = Callable[[ActionContext], Tuple[str, Optional[str]]]
 ACTIONS: Dict[str, Tuple[Action, frozenset]] = {
-    "verify_member": (_verify_member, frozenset({"verified", "terminated", "unverified", "giveup"})),
     "verify_group": (_verify_group, frozenset({"found", "unverified", "giveup"})),
     "say_eligibility": (_say_eligibility, frozenset({"done"})),
     "say_maximum": (_say_maximum, frozenset({"done"})),
