@@ -8,17 +8,11 @@ from fake_payer.coverage import Fixture
 from fake_payer.tree import PhoneTree, TreeError, TreeRunner, form_pages, form_prompt
 from tests.test_tree import FIXTURE, REAL_TREE, FakePrompts, ScriptedCall, enter, small, walk
 
-ENTER_MEMBER = [("press 1", "1")]
-
 
 @pytest.fixture(autouse=True)
 def whole_prompts_are_one_frame(monkeypatch):
     """The test prompts are their own text; a long page would be cut into several frames mid-sentence, so each prompt is sent in one piece."""
     monkeypatch.setattr("fake_payer.tree.FRAME_BYTES", 10 ** 6)
-
-
-def member(digits, dob):
-    return ENTER_MEMBER + enter("six digit member", digits) + enter("date of birth", dob, "Coverage is active")
 
 
 # ---- the tree and the fixture agree --------------------------------------------------------------------------------------------------
@@ -100,35 +94,9 @@ async def test_a_key_that_is_not_on_the_page_is_refused_and_the_page_is_read_aga
 
 
 # ---- services, procedure checks, groups, the reference -----------------------------------------------------------------------------------
-
-async def test_services_and_limits_say_how_much_of_each_limit_the_member_has_used():
-    script = member("100002", "07021990") + [("To check another member", "5"), ("For preventive services", "1"), ("routine exam", None), ("For preventive services", "4"),
-                                             ("Orthodontics are covered", None)]
-    result, call = await walk(script, tree=small(), hang_up_after=True)
-    said = " ".join(call.said)
-    assert "routine exam: two per calendar year, two used and zero remaining." in said
-    assert "adult cleaning: two per calendar year, two used and zero remaining." in said
-    assert "full set of x-rays: one per three years, zero used and one remaining." in said
-
-
-async def test_a_plan_with_no_orthodontic_benefit_says_so():
-    script = member("100004", "01202001") + [("To check another member", "5"), ("For preventive services", "4"), ("no benefit for orthodontics", None)]
-    result, call = await walk(script, tree=small(), hang_up_after=True)
-    assert "The plan has no benefit for orthodontics." in call.said
-
-
-@pytest.mark.parametrize("member_digits,dob,code,expected", [
-    ("100001", "03141985", "2740", "porcelain crown is covered at fifty percent. The deductible applies. The limit is one per five years, with zero used and one remaining. It is covered now."),
-    ("100002", "07021990", "1110", "adult cleaning is covered at one hundred percent. The deductible does not apply. The limit is two per calendar year, with two used and zero remaining. "
-                                   "It is not covered now: the frequency limit has been reached."),
-    ("100004", "01202001", "8080", "comprehensive braces treatment is not covered now: the plan has no benefit for this category."),
-    ("100001", "03141985", "9999", "Procedure code D nine nine nine nine is not on file."),
-])
-async def test_a_procedure_code_is_checked_for_the_member(member_digits, dob, code, expected):
-    script = member(member_digits, dob) + [("To check another member", "6")] + enter("procedure code", code, expected[:30])
-    result, call = await walk(script, tree=small(), hang_up_after=True)
-    assert any(expected in line for line in call.said)
-
+# 2026-11-25: member-level lookup (a real member ID + date of birth, as opposed to a group number with no member) is no longer reachable by
+# keypad at all -- option 1 now goes straight to the conversational line (see test_tree.py); the per-member tests that used to reach it via
+# ENTER_MEMBER/member() (services-used figures, a procedure code checked against a specific member) are removed with it.
 
 async def test_a_plan_is_found_by_group_number_with_nothing_about_a_member():
     script = [("press 1", "7")] + enter("five digit group number", "10001", "I found the plan Acme Gold Dental") + [

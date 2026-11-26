@@ -39,7 +39,7 @@ nodes:
       For eligibility and benefits, press 1. For claim status, press 2. For fax numbers and mailing addresses, press 3. For provider enrollment, press 4.
       To speak with a supervisor, press 5. For plan questions, press 6. For plan benefits by group number, press 7. For a reference number for this call, press 8.
       To speak with a representative, press 0. To hear these options again, press 9.
-    options: {"1": ask_member, "2": claims, "3": addresses, "4": enrollment, "5": supervisor, "6": forms, "7": ask_group, "8": reference, "0": representative, "9": main}
+    options: {"1": eligibility_benefits, "2": claims, "3": addresses, "4": enrollment, "5": supervisor, "6": forms, "7": ask_group, "8": reference, "0": representative, "9": main}
     invalid: That is not a valid option.
     timeout: We did not receive your entry.
 
@@ -47,57 +47,33 @@ nodes:
     type: hangup
     say: We did not receive a valid entry. Goodbye.
 
-  # ---- eligibility and benefits: the part of the tree that answers ------------------------------------------------------------------------
+  # ---- eligibility and benefits ------------------------------------------------------------------------------------------------------------
+  # For now this goes straight to the same conversational line as "speak with a representative" (agent_framework's platform agent is not
+  # expected to navigate a numbered self-service benefits menu -- it is built around a back-and-forth conversation). The member-ID/DOB
+  # self-service collection flow this used to lead to (ask_member/ask_dob/verify/not_verified/cannot_verify/after_terminated) is removed
+  # rather than left unreachable (the tree's own reachability check does not allow dead nodes); it is still in git history if a later
+  # change adds real self-service-menu navigation to the platform agent.
 
-  ask_member:
-    type: collect
-    field: member
-    length: 6
-    say: Please enter the six digit member I D, without the letter M. To return to the main menu, press star.
-    star_to: main
-    next: ask_dob
-    invalid: That member I D is not complete.
-
-  ask_dob:
-    type: collect
-    field: dob
-    length: 8
-    check: date
-    say: >-
-      Please enter the patient's date of birth: two digits for the month, two for the day, and four for the year. For example, March fourteenth, nineteen eighty-five,
-      is zero three, one four, one nine eight five.
-    star_to: main
-    next: verify
-    invalid: That is not a valid date.
-
-  verify:
-    type: action
-    action: verify_member
-    routes: {verified: member_menu, terminated: after_terminated, unverified: not_verified, giveup: cannot_verify}
-
-  not_verified:
+  eligibility_benefits:
     type: say
-    say: We could not verify the member with that information. Let's try again.
-    next: ask_member
+    say: Please hold for the next available representative.
+    next: eligibility_benefits_hold
 
-  cannot_verify:
-    type: hangup
-    say: We are unable to verify the member. Please check the member's card and call back. Goodbye.
+  eligibility_benefits_hold:
+    type: hold
+    next: eligibility_benefits_transfer
 
-  after_terminated:
-    type: menu
-    say: To check another member, press 1. To return to the main menu, press 2. To end this call, press 3.
-    options: {"1": ask_member, "2": main, "3": goodbye}
-    invalid: That is not a valid option.
-    timeout: We did not receive your entry.
+  eligibility_benefits_transfer:
+    type: transfer
+    say: Thank you for holding.
 
   member_menu:
     type: menu
     say: >-
       For eligibility dates, press 1. For the annual maximum and deductible, press 2. For coverage percentages, press 3. For waiting periods, press 4.
-      For covered services and their limits, press 5. To check a procedure code, press 6. For plan questions, press 8. To check another member, press 7.
+      For covered services and their limits, press 5. To check a procedure code, press 6. For plan questions, press 8.
       To return to the main menu, press star. To hear these options again, press 9.
-    options: {"1": eligibility, "2": maximum, "3": percentages, "4": waiting, "5": services_menu, "6": ask_code, "7": ask_member, "8": forms, "*": main, "9": member_menu}
+    options: {"1": eligibility, "2": maximum, "3": percentages, "4": waiting, "5": services_menu, "6": ask_code, "8": forms, "*": main, "9": member_menu}
     invalid: That is not a valid option.
     timeout: We did not receive your entry.
     giveup: no_entry
@@ -264,10 +240,6 @@ nodes:
     type: action
     action: say_reference
     routes: {done: main}
-
-  goodbye:
-    type: hangup
-    say: Thank you for calling. Goodbye.
 
   # ---- dead ends and bad paths ------------------------------------------------------------------------------------------------------------
 
