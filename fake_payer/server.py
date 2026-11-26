@@ -90,7 +90,8 @@ class FakePayerServer:
     def __init__(self, config: Config, tools: Optional[Tools] = None, system_prompt: Optional[str] = None, limits: Optional[Limits] = None, refusals: Optional[Refusals] = None,
                  tree: Optional[PhoneTree] = None, prompts: Optional[Prompts] = None, fixture: Optional[Fixture] = None, chance: Optional[random.Random] = None, tree_pace: float = 0.02):
         """By default the line answers from the fixture with the persona's prompt (which carries the call's own reference number), or, for the calls `config.line_mode` gives to the
-        phone tree, from tree.yaml. `tools`, `system_prompt`, `tree`, `prompts`, `fixture`, `chance` (what decides a call in "mixed" mode) and `tree_pace` replace them in tests."""
+        phone tree, from tree.yaml. `tools`, `system_prompt`, `tree`, `prompts`, `fixture`, `chance` (what decides a call in "mixed" mode, and a menu's wording/numbering
+        when it offers `variants`) and `tree_pace` replace them in tests."""
         self._config = config
         self._fixture = fixture if fixture is not None else Fixture.load()
         self._tools: Tools = tools if tools is not None else make_tools(self._fixture)
@@ -167,7 +168,7 @@ class FakePayerServer:
         try:
             if mode == "tree":
                 runner = TreeRunner(self._tree, self._fixture, self._prompts, call, reference=call_reference(call_uuid), ring_audio=self._ring_audio, answer_delay_seconds=self._config.answer_delay_seconds,
-                                    pace=self._tree_pace)
+                                    pace=self._tree_pace, chance=self._chance)
                 try:
                     result = await asyncio.wait_for(runner.run(), self._config.max_call_seconds or None)
                     ended = {"hangup": "tree_ended", "transfer": "transferred", "caller_gone": "caller_hung_up"}[result.outcome]

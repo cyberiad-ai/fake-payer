@@ -42,6 +42,20 @@ nodes:
     options: {"1": eligibility_benefits, "2": claims, "3": addresses, "4": enrollment, "5": supervisor, "6": forms, "7": ask_group, "8": reference, "0": representative, "9": main}
     invalid: That is not a valid option.
     timeout: We did not receive your entry.
+    # Picked at random, once per call (see TreeRunner._effective_node): both the wording AND which key goes with which option vary, so an automated caller cannot learn
+    # a fixed number for "eligibility and benefits" -- it has to listen to what the menu actually says each time, the same way a real payer's menu wording and
+    # numbering differ from the last one. Each variant must offer exactly the same set of destinations as the base options (PhoneTree.from_dict enforces this).
+    variants:
+      - say: >-
+          For a patient's eligibility and benefits, press 4. To check on a claim, press 7. For a fax number or mailing address, press 2. To enroll as a new provider,
+          press 9. To speak with a supervisor, press 1. For questions about a plan, press 3. To look up benefits by group number, press 5. For this call's reference
+          number, press 6. To speak with an agent, press 8. Press 0 to hear this menu again.
+        options: {"4": eligibility_benefits, "7": claims, "2": addresses, "9": enrollment, "1": supervisor, "3": forms, "5": ask_group, "6": reference, "8": representative, "0": main}
+      - say: >-
+          To verify a patient's benefits, press 6. For the status of a claim, press 1. For addresses and fax numbers, press 9. For provider enrollment, press 3.
+          For a supervisor, press 8. For plan and policy questions, press 2. For a plan's benefits using a group number, press 0. To hear the reference number for
+          this call, press 4. To talk to a person, press 5. To repeat these options, press 7.
+        options: {"6": eligibility_benefits, "1": claims, "9": addresses, "3": enrollment, "8": supervisor, "2": forms, "0": ask_group, "4": reference, "5": representative, "7": main}
 
   no_entry:
     type: hangup

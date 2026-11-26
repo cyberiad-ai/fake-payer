@@ -26,13 +26,17 @@ def key_frame(digit):
 
 
 class Chance:
-    """A random number generator that gives the numbers it is told to."""
+    """A random number generator that gives the numbers it is told to. `choice` always takes the first option offered -- for a menu with `variants`, that is the base
+    node's own wording/numbering (see TreeRunner._effective_node's `[None] + variants`), so a test that does not care about menu-wording variation stays deterministic."""
 
     def __init__(self, *values):
         self.values = list(values)
 
     def random(self):
         return self.values.pop(0)
+
+    def choice(self, seq):
+        return seq[0]
 
 
 # ---- configuration ----------------------------------------------------------------------------------------------------------------------
@@ -97,7 +101,7 @@ async def hear(call):
 
 
 async def test_a_tree_call_takes_vonage_keys_answers_by_menu_and_hangs_up(counted, tmp_path):
-    server = FakePayerServer(config(tmp_path, LINE_MODE="tree"), tree=small(), prompts=FakePrompts(), tree_pace=0)
+    server = FakePayerServer(config(tmp_path, LINE_MODE="tree"), tree=small(), prompts=FakePrompts(), tree_pace=0, chance=Chance())
     context, port = await running(server)
     try:
         async with connect(await ws_url(port, "tree-1")) as call:
@@ -119,7 +123,7 @@ async def test_a_tree_call_takes_vonage_keys_answers_by_menu_and_hangs_up(counte
 
 
 async def test_a_key_that_is_not_one_the_keypad_has_is_ignored(counted, tmp_path):
-    server = FakePayerServer(config(tmp_path, LINE_MODE="tree"), tree=small(), prompts=FakePrompts(), tree_pace=0)
+    server = FakePayerServer(config(tmp_path, LINE_MODE="tree"), tree=small(), prompts=FakePrompts(), tree_pace=0, chance=Chance())
     context, port = await running(server)
     try:
         async with connect(await ws_url(port, "tree-2")) as call:
@@ -135,7 +139,7 @@ async def test_a_key_that_is_not_one_the_keypad_has_is_ignored(counted, tmp_path
 
 
 async def test_a_caller_who_hangs_up_during_the_tree_is_logged_as_such(counted, tmp_path):
-    server = FakePayerServer(config(tmp_path, LINE_MODE="tree"), tree=small(), prompts=FakePrompts(), tree_pace=0)
+    server = FakePayerServer(config(tmp_path, LINE_MODE="tree"), tree=small(), prompts=FakePrompts(), tree_pace=0, chance=Chance())
     context, port = await running(server)
     try:
         async with connect(await ws_url(port, "tree-3")) as call:
@@ -148,7 +152,7 @@ async def test_a_caller_who_hangs_up_during_the_tree_is_logged_as_such(counted, 
 
 
 async def test_pressing_zero_holds_and_then_the_representative_takes_the_call(legs, tmp_path):
-    server = FakePayerServer(config(tmp_path, LINE_MODE="tree"), tree=small(), prompts=FakePrompts(), tree_pace=0, system_prompt="persona")
+    server = FakePayerServer(config(tmp_path, LINE_MODE="tree"), tree=small(), prompts=FakePrompts(), tree_pace=0, system_prompt="persona", chance=Chance())
     context, port = await running(server)
     try:
         async with connect(await ws_url(port, "tree-4")) as call:
