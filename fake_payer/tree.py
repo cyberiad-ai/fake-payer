@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -256,6 +257,20 @@ class PhoneTree:
                     if str(key) not in KEYS:
                         raise TreeError(f"node {name}: {key!r} is not a key (0-9, * or #)")
                     target(f"node {name} option {key}", destination)
+                for i, variant in enumerate(node.get("variants") or []):
+                    if "{" in str(variant.get("say") or "") or "}" in str(variant.get("say") or ""):
+                        raise TreeError(f"node {name} variant {i}: say may not contain braces")
+                    if not str(variant.get("say") or "").strip():
+                        raise TreeError(f"node {name} variant {i}: needs `say`")
+                    variant_options = variant.get("options") or {}
+                    if not variant_options:
+                        raise TreeError(f"node {name} variant {i}: a menu needs options")
+                    for key, destination in variant_options.items():
+                        if str(key) not in KEYS:
+                            raise TreeError(f"node {name} variant {i}: {key!r} is not a key (0-9, * or #)")
+                        target(f"node {name} variant {i} option {key}", destination)
+                    if set(variant_options.values()) != set(options.values()):
+                        raise TreeError(f"node {name} variant {i}: must offer exactly the same destinations as the base options, reworded or renumbered")
             if kind == "collect":
                 if not str(node.get("field") or ""):
                     raise TreeError(f"node {name}: needs `field`")
@@ -315,6 +330,7 @@ class PhoneTree:
         out: List[str] = []
         for node in self.nodes.values():
             out += [str(node[key]).strip() for key in ("say", "invalid", "timeout") if node.get(key) and node["type"] != "form"]
+            out += [str(variant["say"]).strip() for variant in (node.get("variants") or [])]
             if node["type"] == "form" and fixture is not None:
                 entries = fixture.benefit_topics()[str(node["topic"])]
                 pages = form_pages(entries)
@@ -339,14 +355,18 @@ class _End(Exception):
 
 class TreeRunner:
     def __init__(self, tree: PhoneTree, fixture: Fixture, prompts: Prompts, call: TreeCall, *, reference: str = "", ring_audio: bytes = b"", answer_delay_seconds: float = 0.0,
-                 pace: float = FRAME_SECONDS, clock: Callable[[], float] = time.monotonic):
+                 pace: float = FRAME_SECONDS, clock: Callable[[], float] = time.monotonic, chance: Optional[random.Random] = None):
+        """`chance`: what picks a menu's wording and key numbering for this call, when the node offers `variants` -- the same instance (or None) for every visit to that node
+        within the call, so a menu does not reword itself if the caller hears it again (e.g. pressing 9 to repeat it, or returning to it from a sub-menu). None (the
+        default, and every existing caller that does not pass one) always uses the node exactly as written, unchanged -- no caller needs to know variants exist."""
         self._tree, self._fixture, self._prompts, self._call, self._reference = tree, fixture, prompts, call, reference
-        self._ring_audio, self._answer_delay, self._pace, self._clock = ring_audio, answer_delay_seconds, pace, clock
+        self._ring_audio, self._answer_delay, self._pace, self._clock, self._chance = ring_audio, answer_delay_seconds, pace, clock, chance
         self._keys: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         self._session = Session()
         self._events: List[Dict[str, Any]] = []
         self._started = clock()
         self._node = ""
+        self._effective: Dict[str, Dict[str, Any]] = {}            # node name -> the variant (or base) chosen for this call, once decided
 
     @property
     def events(self) -> List[Dict[str, Any]]:
@@ -354,6 +374,22 @@ class TreeRunner:
 
     def _event(self, **fields: Any) -> None:
         self._events.append({"at": round(self._clock() - self._started, 1), "node": self._node, **fields})
+
+    def _effective_node(self, name: str) -> Dict[str, Any]:
+        """The node to actually use for this visit: the first time this call reaches `name`, if it offers `variants` and a chance generator was given, one of (the base
+        node's own wording/numbering, or one of its variants) is picked at random and kept for every later visit in this same call."""
+        chosen = self._effective.get(name)
+        if chosen is not None:
+            return chosen
+        base = self._tree.nodes[name]
+        variants = base.get("variants")
+        if not variants or self._chance is None:
+            chosen = base
+        else:
+            picked = self._chance.choice([None] + variants)              # None: the base's own wording/numbering, picked just as often as any variant
+            chosen = base if picked is None else {**base, "say": picked["say"], "options": picked["options"]}
+        self._effective[name] = chosen
+        return chosen
 
     # ---- keys and sound ------------------------------------------------------
 
@@ -511,7 +547,7 @@ class TreeRunner:
                 await asyncio.sleep(self._answer_delay)
             name = self._tree.start
             while True:
-                self._node, node = name, self._tree.nodes[name]
+                self._node, node = name, self._effective_node(name)
                 self._event(visit=True)
                 kind = node["type"]
                 if kind == "say":

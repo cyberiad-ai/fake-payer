@@ -59,9 +59,9 @@ def enter(prompt, digits, then=None):
     return [(prompt, digits[0])] + [("", d) for d in digits[1:]] + ([(then, None)] if then else [])
 
 
-async def walk(script, tree=REAL_TREE, hang_up_after=False, seconds=5.0):
+async def walk(script, tree=REAL_TREE, hang_up_after=False, seconds=5.0, chance=None):
     call = ScriptedCall(script, hang_up_after=hang_up_after)
-    runner = TreeRunner(tree, FIXTURE, FakePrompts(), call, pace=0)
+    runner = TreeRunner(tree, FIXTURE, FakePrompts(), call, pace=0, chance=chance)
     result = await asyncio.wait_for(runner.run(), seconds)
     return result, call
 
@@ -211,6 +211,34 @@ async def test_keys_pressed_on_hold_are_ignored():
     """The caller presses 2 during the hold; it must not be taken for the next menu's answer."""
     result, call = await walk([("press 1", "5"), ("Please hold for the next available supervisor", "2")], tree=small())
     assert call.said[-1].startswith("All of our supervisors are busy")
+
+
+async def test_the_main_menu_can_reword_and_renumber_itself_but_stays_functionally_the_same():
+    """2026-11-26: a real automated caller should not be able to learn a fixed digit for "eligibility and benefits" -- the wording and the numbering of the main menu
+    vary per call when a chance generator is given (production always gives one; tests that do not care pass none and get the base wording, deterministically)."""
+    import random
+
+    menu_texts, destinations_for_1 = set(), set()
+    for seed in range(12):
+        result, call = await walk([("For", "1")], tree=small(), hang_up_after=True, chance=random.Random(seed))
+        menu_texts.add(call.said[1])
+        visited = [e["node"] for e in result.events if e.get("visit")]
+        assert visited[0] == "greeting" and visited[1] == "main"
+        if len(visited) > 2:                                 # pressing "1" reached a real, valid destination every time (the variant validator already guarantees
+            destinations_for_1.add(visited[2])               # this structurally; here it is exercised live)
+    assert len(menu_texts) > 1                                # across enough seeds, the wording really did vary
+    assert len(destinations_for_1) > 1                        # ...and so did what key "1" actually does
+
+
+def test_a_node_keeps_the_same_chosen_wording_for_every_visit_within_one_call():
+    """A menu with `variants` must not reword itself if the caller hears it again within the same call (pressing its own repeat key, or returning from a sub-menu) --
+    _effective_node caches its one choice per call, keyed only by node name."""
+    import random
+
+    runner = TreeRunner(REAL_TREE, FIXTURE, FakePrompts(), ScriptedCall([]), pace=0, chance=random.Random(1))
+    first = runner._effective_node("main")
+    for _ in range(5):
+        assert runner._effective_node("main") is first         # every later visit in this call gets the exact same object, not a fresh random pick
 
 
 async def test_a_representative_is_a_hold_and_then_a_transfer_to_the_conversational_line():
